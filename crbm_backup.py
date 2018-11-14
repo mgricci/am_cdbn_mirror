@@ -136,19 +136,19 @@ class CRBM(object):
       else:
         conv = tf.nn.conv2d(self._get_padded_hidden(hidden), self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
       operand = visible
-    weight =  tf.reduce_sum(tf.mul(operand,conv)) 
-    bias_H =  tf.reduce_sum(tf.mul(self.biases_H,tf.reduce_sum(hidden,[0,1,2]))) 
+    weight =  tf.reduce_sum(tf.multiply(operand,conv)) 
+    bias_H =  tf.reduce_sum(tf.multiply(self.biases_H,tf.reduce_sum(hidden,[0,1,2]))) 
     
     if self.gaussian_unit: 
       'GAUSSIAN UNIT IN VISIBLE LAYER'   
       weight = tf.div(weight,self.gaussian_variance)
-      bias_V = tf.reduce_sum(tf.square(tf.sub(visible,tf.reshape(self.biases_V,[1,1,1,self.visible_channels]))))
+      bias_V = tf.reduce_sum(tf.square(tf.subtract(visible,tf.reshape(self.biases_V,[1,1,1,self.visible_channels]))))
       bias_V = tf.div(bias_V,2*self.gaussian_variance*self.gaussian_variance)
-      output = tf.sub(bias_V,tf.add(bias_H,weight))
+      output = tf.subtract(bias_V,tf.add(bias_H,weight))
     else: 
       'BINARY UNIT IN VISIBLE LAYER'        
-      bias_V =  tf.reduce_sum(tf.mul(self.biases_V,tf.reduce_sum(visible,[0,1,2])))
-      output =  tf.mul(-1,tf.add(weight,tf.add(bias_H,bias_V)))
+      bias_V =  tf.reduce_sum(tf.multiply(self.biases_V,tf.reduce_sum(visible,[0,1,2])))
+      output =  tf.multiply(-1,tf.add(weight,tf.add(bias_H,bias_V)))
     return tf.div(output,self.batch_size)
       
         
@@ -194,9 +194,9 @@ class CRBM(object):
           return tf.div(exp,sum_bis)
         elif result == 'pooling': 
           'We want to obtain POOLING layer configuration'
-          return tf.sub(1.0, tf.div(1.0,sum))
-        elif result == 'both'
-          return (tf.div(exp,sum_bis), tf.sub(1.0,tf.div(1.0,sum)))
+          return tf.subtract(1.0, tf.div(1.0,sum))
+        elif result == 'both':
+          return (tf.div(exp,sum_bis), tf.subtract(1.0,tf.div(1.0,sum)))
       return tf.sigmoid(bias)
     
     'Computing VISIBLE layer with HIDDEN layer given'
@@ -208,7 +208,7 @@ class CRBM(object):
       else:
         conv = tf.nn.conv2d(self._get_padded_hidden(operand), self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
       if self.gaussian_unit:       
-        conv = tf.mul(conv,self.gaussian_variance)
+        conv = tf.multiply(conv,self.gaussian_variance)
       bias = tf.nn.bias_add(conv, self.biases_V)
       if self.gaussian_unit:       
         return bias
@@ -260,7 +260,7 @@ class CRBM(object):
           return tf.div(exp + sum_bis, sum_bis)
         elif result == 'pooling': 
           'We want to obtain POOLING layer configuration'
-          return tf.sub(1.0,tf.div(1.0,sum))
+          return tf.subtract(1.0,tf.div(1.0,sum))
       return tf.sigmoid(bias)
       
         
@@ -291,7 +291,7 @@ class CRBM(object):
       height   =  self.visible_height
       width    =  self.visible_width
       channels =  self.visible_channels
-    return tf.select(tf.random_uniform([self.batch_size,height,width,channels]) - mean_activation < 0, tf.ones([self.batch_size,height,width,channels]), tf.zeros([self.batch_size,height,width,channels]))
+    return tf.where(tf.random_uniform([self.batch_size,height,width,channels]) - mean_activation < 0, tf.ones([self.batch_size,height,width,channels]), tf.zeros([self.batch_size,height,width,channels]))
       
         
       
@@ -325,19 +325,19 @@ class CRBM(object):
     g_weight_l2       = self._get_param_weight_penalty(self.kernels)
     
     'FOR BIAS VISIBLE'
-    g_biais_V = tf.div(tf.reduce_sum(tf.sub(V0,VN), [0,1,2]),self.batch_size)
+    g_biais_V = tf.div(tf.reduce_sum(tf.subtract(V0,VN), [0,1,2]),self.batch_size)
     if self.gaussian_unit:
       g_biais_V = tf.div(g_biais_V,self.gaussian_variance * self.gaussian_variance)
     
     'FOR BIAS HIDDEN' 
-    g_biais_H            =   tf.div(tf.reduce_sum(tf.sub(Q0,QN), [0,1,2]),self.batch_size)
+    g_biais_H            =   tf.div(tf.reduce_sum(tf.subtract(Q0,QN), [0,1,2]),self.batch_size)
     g_biais_H_sparsity   =   self._get_param_sparsity_penalty('hidden_bias', Q0, V0)
     
     'UPDATE ALL'
     ret_w  = self._apply_grad(self.kernels,  g_weight,  self.vitesse_kernels, wd = True, wd_value = g_weight_l2, sparsity = True, sparsity_value = g_weight_sparsity,  global_step = global_step)
     ret_bv = self._apply_grad(self.biases_V, g_biais_V, self.vitesse_biases_V,                                                                                         global_step = global_step)
     ret_bh = self._apply_grad(self.biases_H, g_biais_H, self.vitesse_biases_H,                                   sparsity = True, sparsity_value = g_biais_H_sparsity, global_step = global_step)
-    cost = tf.reduce_sum(tf.square(tf.sub(data,VN)))
+    cost = tf.reduce_sum(tf.square(tf.subtract(data,VN)))
     update = tf.reduce_sum(VN)
     return ret_w, ret_bv, ret_bh, cost, update
       
@@ -427,12 +427,12 @@ class CRBM(object):
     global_step       :    how far are we in the training, required for computing learning rate decay"""
     
     lr = tf.train.exponential_decay(self.learning_rate,global_step,self.decay_step,self.learning_rate_decay,staircase=True)
-    ret = tf.add(tf.mul(self.momentum,vitesse),tf.mul(lr,grad_value))
+    ret = tf.add(tf.multiply(self.momentum,vitesse),tf.multiply(lr,grad_value))
     ret = vitesse.assign(ret)
     if wd:
-      ret = tf.sub(ret,tf.mul(lr,wd_value))  
+      ret = tf.subtract(ret,tf.multiply(lr,wd_value))  
     if sparsity:
-      ret = tf.sub(ret,tf.mul(lr,sparsity_value))
+      ret = tf.subtract(ret,tf.multiply(lr,sparsity_value))
     return parameter.assign_add(ret)
       
         
@@ -456,16 +456,16 @@ class CRBM(object):
     if self.gaussian_unit:
       ret = ret/self.gaussian_variance
     mean = tf.reduce_sum(Q0, [0], keep_dims = True)
-    baseline = tf.mul(tf.sub(self.sparsity_target,mean),tf.mul(tf.sub(1.0,Q0),Q0))
+    baseline = tf.multiply(tf.subtract(self.sparsity_target,mean),tf.multiply(tf.subtract(1.0,Q0),Q0))
     if name == 'hidden_bias':
-      return tf.mul(ret,tf.reduce_sum(baseline, [0,1,2]))
+      return tf.multiply(ret,tf.reduce_sum(baseline, [0,1,2]))
     if name == 'kernel':
       if self.padding:
         retBis = tf.nn.conv2d(self._get_padded_visible(tf.transpose(V0,perm=[3,1,2,0])), tf.transpose(baseline,perm=[1,2,0,3]), [1, 1, 1, 1], padding='VALID')
       else:
         retBis = tf.nn.conv2d(tf.transpose(V0,perm=[3,1,2,0]), tf.transpose(baseline,perm=[1,2,0,3]), [1, 1, 1, 1], padding='VALID')
       retBis = tf.transpose(retBis,perm=[1,2,0,3])
-      return tf.mul(ret,retBis)
+      return tf.multiply(ret,retBis)
       
         
         
@@ -477,7 +477,7 @@ class CRBM(object):
     PARAMETERS :
     operand               :        parameter to be regularized"""
     
-    return tf.mul(self.weight_decay,operand)
+    return tf.multiply(self.weight_decay,operand)
       
         
         
@@ -486,7 +486,7 @@ class CRBM(object):
   def _get_flipped_kernel(self):
     """INTENT : Not only flip kernel horizontally and vertically but also swap in and out channels"""
     
-    return tf.transpose(tf.reverse(self.kernels,[True,True,False,False]),perm=[0, 1, 3, 2])
+    return tf.transpose(tf.reverse(self.kernels, [0, 1]),perm=[0, 1, 3, 2])
       
         
         

@@ -3,6 +3,7 @@ import numpy as np
 from tensorflow.examples.tutorials.mnist import mnist
 from tensorflow.examples.tutorials.mnist import input_data
 import cdbn_backup as cdbn
+import os
 
 
 """ --------------------------------------------
@@ -87,7 +88,7 @@ sess = tf.Session()
     ------------------- MODEL -------------------
     --------------------------------------------- """
 
-my_cdbn = cdbn.CDBN('mnist_cdbn', 20, '/home/arthur/pedestrian_detection/log', mnist_dataset, sess, verbosity = 2)
+my_cdbn = cdbn.CDBN('mnist_cdbn', 20, os.path.expanduser('~/dbn_figs/log'), mnist_dataset, sess, verbosity = 2)
 
 my_cdbn.add_layer('layer_1', fully_connected = False, v_height = 28, v_width = 28, v_channels = 1, f_height = 11, f_width = 11, f_number = 40, 
                init_biases_H = -3, init_biases_V = 0.01, init_weight_stddev = 0.01, 
@@ -122,5 +123,5 @@ my_cdbn.lock_cdbn()
     --------------------------------------------- """
 my_cdbn.manage_layers(['layer_1','layer_2','layer_3'],[],[10000,10000,10000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
 # my_cdbn.do_eval()
-res = my_cdbn.dbn_gibbs(mnist_dataset.next_batch(), 128)
+res = my_cdbn.dbn_gibbs(mnist_dataset.next_batch(20), 128)
 
