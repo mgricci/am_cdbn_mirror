@@ -110,7 +110,7 @@ my_cdbn.add_layer('layer_3', fully_connected = True, v_height = 1, v_width = 1, 
                learning_rate = 0.0025, learning_rate_decay = 0.5, momentum = 0.9, decay_step = 50000,  
                weight_decay = 0.1, sparsity_target = 0.1, sparsity_coef = 0.1)
 
-my_cdbn.add_softmax_layer(10, 0.1)
+# my_cdbn.add_softmax_layer(10, 0.1)
 
 my_cdbn.lock_cdbn()
 
@@ -121,4 +121,6 @@ my_cdbn.lock_cdbn()
     ------------------ TRAINING -----------------
     --------------------------------------------- """
 my_cdbn.manage_layers(['layer_1','layer_2','layer_3'],[],[10000,10000,10000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
-my_cdbn.do_eval()
+# my_cdbn.do_eval()
+res = my_cdbn.dbn_gibbs(mnist_dataset.next_batch(), 128)
+
