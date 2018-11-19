@@ -536,7 +536,7 @@ class CDBN(object):
 
 
         
-  def _gibbs_step(self, t, vs, hps):
+  def _gibbs_step(self, t, vs, hs, ps):
     """INTENT: Start sampling from the second to last layer all the way to the visible,
                then back to the very deepest layer. So this goes back out and then in.
                This is the loop body used in `dbn_gibbs`' `while_loop`.
@@ -549,30 +549,33 @@ class CDBN(object):
     # Going from deep to shallow.
     # this arr is temporary, we don't store states from the way down in the tensorarray
     way_down_hps = []
-    for i in range(self.number_layer - 2, 0, -1):
+    for i in range(self.number_layer - 2, -1, -1):
+      print(i)
       # Get layer below (V in Lee sec 3.6)
       if i == 0:
+        print('a')
         below_p = vs.read(t - 1)
       else:
-        below_p = hps[i - 1].read(t - 1)
-        if self.layer_name_to_object[self.layer_level_to_name[i - 1]].prob_maxpooling:
-          below_p = below_p[1] # get the pooling part if there is one
+        print('b')
+        below_p = ps[i - 1].read(t - 1)
+        print(below_p)
 
       # Get layer above (H' in Lee sec 3.6)
-      above_h = hps[i + 1].read(t - 1)
-      if self.layer_name_to_object[self.layer_level_to_name[i + 1]].prob_maxpooling:
-        above_h = above_h[0]
+      above_h = hs[i + 1].read(t - 1)
+
+      topdown_signal = self.layer_name_to_object[self.layer_level_to_name[i + 1]].infer_probability(above_h, 'backward')
 
       cur_layer = self.layer_name_to_object[self.layer_level_to_name[i]]
       if cur_layer.prob_maxpooling:
-        means = cur_layer.dbn_infer_probability(below_p, above_h, result='both')
+        means = cur_layer.dbn_infer_probability(below_p, topdown_signal, result='both')
       else:
-        means = cur_layer.dbn_infer_probability(below_p, above_h, result='hidden')
+        means = cur_layer.dbn_infer_probability(below_p, topdown_signal, result='hidden')
       way_down_hps.insert(0, means)
 
     # ************************
     # Now, sample the visible input.
 
+    print(0)
     vis_h = means[0] if cur_layer.prob_maxpooling else means
     vis_layer = self.layer_name_to_object[self.layer_level_to_name[0]]
     vis_means = vis_layer.infer_probability(vis_h, 'backward')
@@ -583,34 +586,55 @@ class CDBN(object):
 
     # All but the last
     for i in range(0, self.number_layer - 1):
+      print(i)
       # Get layer below (V in Lee sec 3.6)
       if i == 0:
+        print('a')
         below_p = vis_means
       else:
+        print('b')
         below_p = way_down_hps[i - 1]
         if self.layer_name_to_object[self.layer_level_to_name[i - 1]].prob_maxpooling:
-          below_p = below_p[1] # get the pooling part if there is one
+          below_p = below_p[1]
 
       # Get layer above (H' in Lee sec 3.6)
-      above_h = way_down_hps[i + 1]
-      if self.layer_name_to_object[self.layer_level_to_name[i + 1]].prob_maxpooling:
-        above_h = above_h[0]
+      if i < self.number_layer - 2:
+        above_h = way_down_hps[i + 1]
+        if self.layer_name_to_object[self.layer_level_to_name[i + 1]].prob_maxpooling:
+          above_h = above_h[0]
+      else:
+        above_h = hs[i + 1].read(t - 1)
+
+      topdown_signal = self.layer_name_to_object[self.layer_level_to_name[i + 1]].infer_probability(above_h, 'backward')
 
       cur_layer = self.layer_name_to_object[self.layer_level_to_name[i]]
       if cur_layer.prob_maxpooling:
-        means = cur_layer.dbn_infer_probability(below_p, above_h, result='both')
+        h, p = cur_layer.dbn_infer_probability(below_p, topdown_signal, result='both')
+        hs[i] = hs[i].write(t, h)
+        ps[i] = ps[i].write(t, p)
       else:
-        means = cur_layer.dbn_infer_probability(below_p, above_h, result='hidden')
-      hps[i] = hps[i].write(t, means)
+        h = p = cur_layer.dbn_infer_probability(below_p, topdown_signal, result='hidden')
+        hs[i] = hs[i].write(t, h)
+        ps[i] = ps[i].write(t, p)
 
     # Last layer's hids/pools
-    last_layer = self.layer_name_to_object[self.layer_level_to_name[i]]
+    print(i + 1)
+    if self.fully_connected_layer == i + 1:
+      print('hi')
+      p = tf.reshape(p, [self.batch_size, -1])
+      p = tf.reshape(p, [self.batch_size, 1, 1, p.get_shape()[1].value])   
+    last_layer = self.layer_name_to_object[self.layer_level_to_name[i + 1]]
+    print(last_layer.fully_connected)
     if last_layer.prob_maxpooling:
-      hps[-1] = hps[-1].write(t, last_layer.infer_probability(means, 'forward', result='both'))
+      last_means = last_layer.infer_probability(p, 'forward', result='both')
+      hs[-1] = hs[-1].write(t, last_means[0])
+      ps[-1] = ps[-1].write(t, last_means[1])
     else:
-      hps[-1] = hps[-1].write(t, last_layer.infer_probability(means, 'forward', result='hidden'))
+      last_means = last_layer.infer_probability(p, 'forward', result='hidden')
+      hs[-1] = hs[-1].write(t, last_means)
+      ps[-1] = ps[-1].write(t, last_means)
 
-    return [t, vs, hps]
+    return [t, vs, hs, ps]
 
 
 
@@ -625,8 +649,9 @@ class CDBN(object):
     input_placeholder = tf.placeholder(tf.float32, shape=self.input)
 
     # We'll store the visible and hidden/pooling layers at each timestep.
-    vs = tf.TensorArray(tf.float32, size=n_gibbs + 1, clear_after_read=False)
-    hps = [tf.TensorArray(tf.float32, size=n_gibbs + 1, clear_after_read=False) for _ in range(self.number_layer)]
+    vs = tf.TensorArray(tf.float32, size=n_gibbs + 1, clear_after_read=False, name='vs')
+    hs = [tf.TensorArray(tf.float32, size=n_gibbs + 1, clear_after_read=False, name=('hs%d' % j)) for j in range(self.number_layer)]
+    ps = [tf.TensorArray(tf.float32, size=n_gibbs + 1, clear_after_read=False, name=('ps%d' % j)) for j in range(self.number_layer)]
 
     # First, do a pass all the way into the network. This is just RBM style for now, not sure if it's
     # helpful here to have fantasies already in the deeper state.
@@ -634,25 +659,34 @@ class CDBN(object):
     vs = vs.write(t, input_placeholder)
     ret_data = input_placeholder
     for i in range(self.number_layer):
+      print(i)
       ret_layer = self.layer_name_to_object[self.layer_level_to_name[i]]
+      if self.fully_connected_layer == i:
+        ret_data = tf.reshape(ret_data, [self.batch_size, -1])
+        ret_data = tf.reshape(ret_data, [self.batch_size, 1, 1, ret_data.get_shape()[1].value])   
       if ret_layer.prob_maxpooling:
-        ret_data = ret_layer.infer_probability(ret_data, method='forward', result = 'both') 
+        h, p = ret_layer.infer_probability(ret_data, method='forward', result = 'both')
+        print(h, p)
+        hs[i] = hs[i].write(t, h)
+        ps[i] = ps[i].write(t, p)
+        ret_data = p
       else:
         ret_data = ret_layer.infer_probability(ret_data, method='forward', result = 'hidden') 
-      if self.fully_connected_layer == i + 1:
-        raise ValueError("Not sure how to sample a net with a softmax layer. "
-                         "Could probably figure out a way to just ignore it if necessary.")
-      hps[i] = hps[i].write(t, ret_data)
+        print(ret_data)
+        hs[i] = hs[i].write(t, ret_data)
+        ps[i] = ps[i].write(t, ret_data)
 
     # Now, the while loop.
     # The loop body starts deep (second to last layer), comes to visible, and then goes deep (last layer) again.
-    cond = lambda t, vs , hs: t < self.n_gibbs
-    loop_vars = [t, vs, hps]
+    cond = lambda t, vs, hs, ps: tf.Print(t, [t], message="While loop step ") < n_gibbs
+    loop_vars = [t, vs, hs, ps]
     body = self._gibbs_step
-    _, v_run, hp_run = tf.while_loop(cond, body, loop_vars)
+    _, v_run, h_run, p_run = tf.while_loop(cond, body, loop_vars)
   
     # Actually run the thing.
-    return self.session.run([v_run, hp_run], feed_dict={ input_placeholder: start_vis_batch })
+    return self.session.run(
+      [v_run.stack(), [h.stack() for h in h_run], [p.stack() for p in p_run]],
+      feed_dict={ input_placeholder: start_vis_batch.reshape(self.input) })
 
 
   

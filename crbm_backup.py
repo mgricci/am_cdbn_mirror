@@ -221,47 +221,49 @@ class CRBM(object):
   def dbn_infer_probability(self, my_visible, topdown_signal, result = 'hidden'):
     """INTENT : Compute the probabily of activation of the hidden or pooling layer given the visible aka prev pooling,
                 and the next layer's hiddens (not poolings!)
-    ------------------------------------------------------------------------------------------------------------------------------------------
-    PARAMETERS :
-    operand         :        given layer
-    method          :        which direction for inference ie forward or backward
-    result          :        should we return the hidden layer of the pooling layer activation (only if prob_maxpooling is True and method is FORWARD)
-    ------------------------------------------------------------------------------------------------------------------------------------------
-    REMARK : If method is FORWARD then compute hidden layer probability and operand is VISIBLE layer
-             If method is BACKWARD then compute visible layer probability and operand is HIDDEN layer"""
-    
+    """
+    print(self.name, "dbn_infer_probability")
     'Computing HIDDEN layer with MY VISIBLE, NEXT HIDDEN layers given'
     'Gaussian visible or not, hidden layer activation is a sigmoid'
-    if method == 'forward': 
-      if self.padding:
-        conv = tf.nn.conv2d(operand, self.kernels, [1, 1, 1, 1], padding='SAME')
-      else:
-        conv = tf.nn.conv2d(operand, self.kernels, [1, 1, 1, 1], padding='VALID')
-      if self.gaussian_unit:  
-        conv = tf.div(conv,self.gaussian_variance)
-      bias = tf.nn.bias_add(conv, self.biases_H)
-      if self.prob_maxpooling: 
-        'SPECIFIC CASE where we enable probabilistic max pooling'
-        'This is section 3.6 in Lee!'
-        exp = tf.exp(bias)
-        custom_kernel = tf.constant(1.0, shape=[2,2,self.filter_number,1])
-        sum = tf.nn.depthwise_conv2d(exp, custom_kernel, [1, 2, 2, 1], padding='VALID')
-        sum = tf.add(1.0,sum)
-        ret_kernel = np.zeros((2,2,self.filter_number,self.filter_number))
-        for i in range(2):
-          for j in range(2):
-            for k in range(self.filter_number):
-              ret_kernel[i,j,k,k] = 1
-        custom_kernel_bis = tf.constant(ret_kernel,dtype = tf.float32)
-        sum_bis = tf.nn.conv2d_transpose(sum, custom_kernel_bis, (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID', name=None)
-        sum_bis += topdown_signal
-        if result == 'hidden': 
-          'We want to obtain HIDDEN layer configuration'
-          return tf.div(exp + sum_bis, sum_bis)
-        elif result == 'pooling': 
-          'We want to obtain POOLING layer configuration'
-          return tf.subtract(1.0,tf.div(1.0,sum))
-      return tf.sigmoid(bias)
+    # handle the problem case where the next layer is fc. the impl makes weird shapes.
+    topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number))
+    if self.padding:
+      conv = tf.nn.conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='SAME')
+    else:
+      conv = tf.nn.conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='VALID')
+    if self.gaussian_unit:  
+      conv = tf.div(conv,self.gaussian_variance)
+    bias = tf.nn.bias_add(conv, self.biases_H)
+    if self.prob_maxpooling: 
+      'SPECIFIC CASE where we enable probabilistic max pooling'
+      'This is section 3.6 in Lee!'
+      custom_kernel = tf.constant(1.0, shape=[2,2,self.filter_number,1])
+      # sum += topdown_signal
+      # sum = tf.add(1.0,sum)
+      ret_kernel = np.zeros((2,2,self.filter_number,self.filter_number))
+      for i in range(2):
+        for j in range(2):
+          for k in range(self.filter_number):
+            ret_kernel[i,j,k,k] = 1
+      custom_kernel_bis = tf.constant(ret_kernel,dtype = tf.float32)
+      supersampled_topdown = tf.nn.conv2d_transpose(topdown_signal, custom_kernel_bis,
+        (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID')
+      total_hidshape_signal = supersampled_topdown + bias
+      exp = tf.exp(total_hidshape_signal)
+      poolshape_denom = 1 + tf.nn.depthwise_conv2d(exp, custom_kernel, [1, 2, 2, 1], padding='VALID')
+      hidshape_denom = tf.nn.conv2d_transpose(poolshape_denom, custom_kernel_bis,
+        (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID')
+      if result == 'hidden': 
+        'We want to obtain HIDDEN layer configuration'
+        return tf.div(total_hidshape_signal, hidshape_denom)
+      elif result == 'pooling': 
+        'We want to obtain POOLING layer configuration'
+        return tf.subtract(1.0,tf.div(1.0, poolshape_denom))
+      elif result == 'both':
+        return (tf.div(total_hidshape_signal, hidshape_denom), tf.subtract(1.0,tf.div(1.0, poolshape_denom)))
+
+    return tf.sigmoid(bias)
+
       
         
         
