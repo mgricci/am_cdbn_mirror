@@ -125,10 +125,16 @@ my_cdbn.lock_cdbn()
     --------------------------------------------- """
 my_cdbn.manage_layers([],['layer_1','layer_2','layer_3'],[10000,10000,10000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
 # my_cdbn.do_eval()
-res = my_cdbn.dbn_gibbs(mnist_dataset.next_batch(20)[0], 8)
-v = res[0].squeeze().swapaxes(0, 1)[0]
-print(v, v.shape)
-
+v, hs, ps = my_cdbn.dbn_gibbs(mnist_dataset.next_batch(20)[0], 8, use_means=False)
+print(v.shape)
+print([h.shape for h in hs])
+print([p.shape for p in ps])
+v = v.squeeze().swapaxes(0, 1)[0]
+ps = [r.squeeze().swapaxes(0, 1)[0, ..., 0] for r in ps]
+hs = [r.squeeze().swapaxes(0, 1)[0, ..., 0] for r in hs]
+print(v.shape)
+print([h.shape for h in hs])
+print([p.shape for p in ps])
 
 def cplx_imshow(ax, z, cm):
     return ax.imshow(colorize(z), aspect='equal', interpolation='nearest', cmap=cm)
@@ -154,4 +160,7 @@ def save_cplx_anim(filename, z, fps=5, cplx=True):
     a.save(filename, fps=fps)
     plt.close('all')
 
-save_cplx_anim('hi.mp4', v, cplx=False)
+save_cplx_anim('v.mp4', v, cplx=False)
+for i, p in enumerate(ps):
+  save_cplx_anim('p%d.mp4' % i, p, cplx=False)
+

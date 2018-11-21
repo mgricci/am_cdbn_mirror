@@ -1,6 +1,7 @@
 from __future__ import division
 import tensorflow as tf
 import numpy as np
+import skimage.util as imx
 
 
 class CRBM(object):
@@ -218,15 +219,16 @@ class CRBM(object):
 
 
 
-  def dbn_infer_probability(self, my_visible, topdown_signal, result = 'hidden'):
+  def dbn_infer_probability(self, my_visible, topdown_signal=None, result = 'hidden'):
     """INTENT : Compute the probabily of activation of the hidden or pooling layer given the visible aka prev pooling,
                 and the next layer's hiddens (not poolings!)
     """
-    print(self.name, "dbn_infer_probability")
+    if topdown_signal is None:
+      return self.infer_probability(my_visible, 'forward', result=result)
+
     'Computing HIDDEN layer with MY VISIBLE, NEXT HIDDEN layers given'
     'Gaussian visible or not, hidden layer activation is a sigmoid'
     # handle the problem case where the next layer is fc. the impl makes weird shapes.
-    topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number))
     if self.padding:
       conv = tf.nn.conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='SAME')
     else:
@@ -237,6 +239,7 @@ class CRBM(object):
     if self.prob_maxpooling: 
       'SPECIFIC CASE where we enable probabilistic max pooling'
       'This is section 3.6 in Lee!'
+      topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number))
       custom_kernel = tf.constant(1.0, shape=[2,2,self.filter_number,1])
       # sum += topdown_signal
       # sum = tf.add(1.0,sum)
@@ -255,21 +258,22 @@ class CRBM(object):
         (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID')
       if result == 'hidden': 
         'We want to obtain HIDDEN layer configuration'
-        return tf.div(total_hidshape_signal, hidshape_denom)
+        return tf.div(exp, hidshape_denom)
       elif result == 'pooling': 
         'We want to obtain POOLING layer configuration'
         return tf.subtract(1.0,tf.div(1.0, poolshape_denom))
       elif result == 'both':
-        return (tf.div(total_hidshape_signal, hidshape_denom), tf.subtract(1.0,tf.div(1.0, poolshape_denom)))
+        return (tf.div(exp, hidshape_denom), tf.subtract(1.0,tf.div(1.0, poolshape_denom)))
 
-    return tf.sigmoid(bias)
+    topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height, self.hidden_width, self.filter_number))
+    return tf.sigmoid(bias + topdown_signal)
 
       
         
         
         
 
-  def draw_samples(self, mean_activation, method ='forward'):
+  def draw_samples(self, mean_activation, method='forward'):
     """INTENT : Draw samples from distribution of specified parameter
     ------------------------------------------------------------------------------------------------------------------------------------------
     PARAMETERS :
@@ -294,8 +298,80 @@ class CRBM(object):
       width    =  self.visible_width
       channels =  self.visible_channels
     return tf.where(tf.random_uniform([self.batch_size,height,width,channels]) - mean_activation < 0, tf.ones([self.batch_size,height,width,channels]), tf.zeros([self.batch_size,height,width,channels]))
-      
-        
+
+
+
+
+
+
+  @staticmethod
+  def _dbn_maxpool_sample_helper(hid_probs, pool_probs):
+    """ Helper for multinomial sampling. """
+    # Store shapes for later
+    hs, ps = hid_probs.shape, pool_probs.shape
+
+    # First, we extract blocks and their corresponding pooling unit
+    # We need to use doubles because of precision problems in np.random.multinomial. Wow did this take me a while to figure out. https://github.com/numpy/numpy/issues/8317
+    hid_prob_patches = np.asarray([
+        imx.view_as_blocks(im, (2, 2, 1)) for im in hid_probs
+      ]).reshape(-1, 4).astype(np.float64)
+    pool_probs_for_patches = np.asarray([
+        imx.view_as_blocks(im, (1, 1, 1)) for im in pool_probs
+      ]).reshape(-1, 1)
+
+    # hid_prob_patches will not sum to 1 over each block, which it needs to for the multinomial sampler
+    # but sometimes we don't even want to sample any hid in a block (i.e. when pooling unit is 0), deal w that later.
+    # first, normalize hidprobs and sample.
+    psums = hid_prob_patches.sum(axis=1)
+    # thing is the total prob could be 0 over some patches, when p(pool=0)=1. have to deal with that
+    hid_prob_patches[psums <= 1e-8, ...] = 0.25
+    psums[psums <= 1e-8] = 1
+    hid_prob_patches /= psums[..., None]
+    patch_hid_samples = np.zeros(hid_prob_patches.shape, dtype=np.float32)
+    for i in range(hid_prob_patches.shape[0]):
+      try:
+        patch_hid_samples[i] = np.random.multinomial(1, hid_prob_patches[i])
+      except:
+        print(hid_prob_patches[i].dtype, hid_prob_patches[i].sum(), hid_prob_patches[i])
+        raise
+
+
+    # sample pools
+    patch_pool_samples = np.random.binomial(1, pool_probs_for_patches).astype(np.float32)
+    # set hids to 0 when pooling unit is off
+    patch_hid_samples *= patch_pool_samples
+
+    # reshape and return.
+    return patch_hid_samples.reshape(hs), patch_pool_samples.reshape(ps)
+
+
+  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden', just_give_the_means=False):      
+    """ This correctly samples the hids/pools like in Lee, so that only one hid per block is active.
+        In a maxpool, this is a py_func situation right now. sorry. """
+    if just_give_the_means:
+      return self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result=result)
+
+    if self.prob_maxpooling:
+      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both')
+      hid_samples, pool_samples = tf.py_func(
+        self._dbn_maxpool_sample_helper,
+        [hid_probs, pool_probs],
+        (tf.float32, tf.float32))
+      hid_samples.set_shape([self.batch_size, self.hidden_height, self.hidden_width, self.filter_number])
+      pool_samples.set_shape([self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number])
+      if result == 'hidden':
+        return hid_samples
+      if result == 'both':
+        return (hid_samples, pool_samples)
+      elif result == 'pooling':
+        return pool_samples
+    elif result == 'hidden':
+      # No pooling, standard sampler will suffice, just need to use dbn probs to incorporate layer above.
+      return self.draw_samples(self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal))
+    else:
+      raise ValueError("Make sure result makes sense w this layer type.")
+
+
       
         
 

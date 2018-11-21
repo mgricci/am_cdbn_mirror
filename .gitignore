@@ -1,1 +1,4 @@
 data/*
+*.mp4
+*.pyc
+*.pyo
