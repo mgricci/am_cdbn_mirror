@@ -125,7 +125,9 @@ my_cdbn.lock_cdbn()
     --------------------------------------------- """
 my_cdbn.manage_layers([],['layer_1','layer_2','layer_3'],[10000,10000,10000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
 # my_cdbn.do_eval()
-v, hs, ps = my_cdbn.dbn_gibbs(mnist_dataset.next_batch(20)[0], 8, use_means=False)
+start_batch = mnist_dataset.next_batch(20)[0]
+noise_batch = np.random.binomial(1, 0.05, start_batch.shape)
+v, hs, ps = my_cdbn.dbn_gibbs(noise_batch, 16, beta_rate=1.05, max_beta=2.0, use_means=False)
 print(v.shape)
 print([h.shape for h in hs])
 print([p.shape for p in ps])
