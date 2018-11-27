@@ -8,6 +8,7 @@ from six.moves import range
 from functools import partial
 
 
+
 class CDBN(object):
   """CONVOLUTIONAL DEEP BELIEF NETWORK"""
   
@@ -537,13 +538,14 @@ class CDBN(object):
 
 
         
-  def _gibbs_step(self, t, vs, hs, ps, use_means=False):
+  def _gibbs_step(self, t, vs, hs, ps, beta, beta_rate=crbm.CONST_ONE, max_beta=crbm.CONST_ONE, use_means=False):
     """INTENT: Start sampling from the second to last layer all the way to the visible,
                then back to the very deepest layer. So this goes back out and then in.
                This is the loop body used in `dbn_gibbs`' `while_loop`.
       Should handle nets with mixed pooling/nonpooling units.
     """
     t += 1
+    beta = tf.minimum(beta * beta_rate, max_beta)
 
     # ***********************
     # For each hidden layer except the last one, sample the hidden/pooling
@@ -560,13 +562,13 @@ class CDBN(object):
       # Get layer above (H' in Lee sec 3.6)
       above_h = hs[i + 1].read(t - 1)
 
-      topdown_signal = self.layer_name_to_object[self.layer_level_to_name[i + 1]].infer_probability(above_h, 'backward')
+      topdown_signal = self.layer_name_to_object[self.layer_level_to_name[i + 1]].infer_probability(above_h, 'backward', beta=beta)
 
       cur_layer = self.layer_name_to_object[self.layer_level_to_name[i]]
       if cur_layer.prob_maxpooling:
-        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', just_give_the_means=use_means)
+        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', just_give_the_means=use_means, beta=beta)
       else:
-        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', just_give_the_means=use_means)
+        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', just_give_the_means=use_means, beta=beta)
       way_down_hps.insert(0, means)
 
     # ************************
@@ -574,7 +576,7 @@ class CDBN(object):
 
     vis_h = means[0] if cur_layer.prob_maxpooling else means
     vis_layer = self.layer_name_to_object[self.layer_level_to_name[0]]
-    vis_means = vis_layer.infer_probability(vis_h, 'backward')
+    vis_means = vis_layer.infer_probability(vis_h, 'backward', beta=beta)
     if use_means:
       vs = vs.write(t, vis_means)
     else:
@@ -601,15 +603,15 @@ class CDBN(object):
       else:
         above_h = hs[i + 1].read(t - 1)
 
-      topdown_signal = self.layer_name_to_object[self.layer_level_to_name[i + 1]].infer_probability(above_h, 'backward')
+      topdown_signal = self.layer_name_to_object[self.layer_level_to_name[i + 1]].infer_probability(above_h, 'backward', beta=beta)
 
       cur_layer = self.layer_name_to_object[self.layer_level_to_name[i]]
       if cur_layer.prob_maxpooling:
-        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', just_give_the_means=use_means)
+        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', just_give_the_means=use_means, beta=beta)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
       else:
-        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', just_give_the_means=use_means)
+        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', just_give_the_means=use_means, beta=beta)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
 
@@ -621,25 +623,26 @@ class CDBN(object):
     last_layer = self.layer_name_to_object[self.layer_level_to_name[i + 1]]
 
     if last_layer.prob_maxpooling:
-      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both', just_give_the_means=use_means)
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both', just_give_the_means=use_means, beta=beta)
       hs[-1] = hs[-1].write(t, last_means[0])
       ps[-1] = ps[-1].write(t, last_means[1])
     else:
-      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden', just_give_the_means=use_means)
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden', just_give_the_means=use_means, beta=beta)
       hs[-1] = hs[-1].write(t, last_means)
       ps[-1] = ps[-1].write(t, last_means)
 
-    return [t, vs, hs, ps]
+    return [t, vs, hs, ps, beta]
 
 
 
-  def dbn_gibbs(self, start_vis_batch, n_gibbs, use_means=False):
+  def dbn_gibbs(self, start_vis_batch, n_gibbs, use_means=False, init_beta=crbm.CONST_ONE, max_beta=crbm.CONST_ONE, beta_rate=crbm.CONST_ONE):
     """INTENT: Gibbs sampling starting from a visible example.
                Should this be extended to start from something else?
                This just works with means right now, it never samples.
 
     start_vis_batch     numpy array!
     """
+    beta = init_beta + 0.0
     input_placeholder = tf.placeholder(tf.float32, shape=self.input)
 
     # We'll store the visible and hidden/pooling layers at each timestep.
@@ -658,21 +661,21 @@ class CDBN(object):
         ret_data = tf.reshape(ret_data, [self.batch_size, -1])
         ret_data = tf.reshape(ret_data, [self.batch_size, 1, 1, ret_data.get_shape()[1].value])   
       if ret_layer.prob_maxpooling:
-        h, p = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='both', just_give_the_means=use_means)
+        h, p = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='both', just_give_the_means=use_means, beta=beta)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
         ret_data = p
       else:
-        ret_data = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='hidden', just_give_the_means=use_means) 
+        ret_data = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='hidden', just_give_the_means=use_means, beta=beta) 
         hs[i] = hs[i].write(t, ret_data)
         ps[i] = ps[i].write(t, ret_data)
 
     # Now, the while loop.
     # The loop body starts deep (second to last layer), comes to visible, and then goes deep (last layer) again.
-    cond = lambda t, vs, hs, ps: tf.Print(t, [t], message="While loop step ") < n_gibbs
-    loop_vars = [t, vs, hs, ps]
-    body = partial(self._gibbs_step, use_means=use_means)
-    _, v_run, h_run, p_run = tf.while_loop(cond, body, loop_vars)
+    cond = lambda t, vs, hs, ps, b: tf.Print(t, [t], message="While loop step ") < n_gibbs
+    loop_vars = [t, vs, hs, ps, beta]
+    body = partial(self._gibbs_step, beta_rate=beta_rate, max_beta=max_beta, use_means=use_means)
+    _, v_run, h_run, p_run, _ = tf.while_loop(cond, body, loop_vars)
   
     # Actually run the thing.
     return self.session.run(

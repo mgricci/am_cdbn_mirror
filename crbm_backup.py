@@ -4,6 +4,9 @@ import numpy as np
 import skimage.util as imx
 
 
+CONST_ONE = tf.constant(1.0)
+
+
 class CRBM(object):
   """CONVOLUTIONAL RESTRICTED BOLTZMANN MACHINE"""
   
@@ -156,7 +159,7 @@ class CRBM(object):
         
         
 
-  def infer_probability(self, operand, method, result = 'hidden'):
+  def infer_probability(self, operand, method, result='hidden', beta=CONST_ONE):
     """INTENT : Compute the probabily of activation of one layer given the other
     ------------------------------------------------------------------------------------------------------------------------------------------
     PARAMETERS :
@@ -176,7 +179,7 @@ class CRBM(object):
         conv = tf.nn.conv2d(operand, self.kernels, [1, 1, 1, 1], padding='VALID')
       if self.gaussian_unit:  
         conv = tf.div(conv,self.gaussian_variance)
-      bias = tf.nn.bias_add(conv, self.biases_H)
+      bias = beta * tf.nn.bias_add(conv, self.biases_H)
       if self.prob_maxpooling: 
         'SPECIFIC CASE where we enable probabilistic max pooling'
         exp = tf.exp(bias)
@@ -210,7 +213,7 @@ class CRBM(object):
         conv = tf.nn.conv2d(self._get_padded_hidden(operand), self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
       if self.gaussian_unit:       
         conv = tf.multiply(conv,self.gaussian_variance)
-      bias = tf.nn.bias_add(conv, self.biases_V)
+      bias = beta * tf.nn.bias_add(conv, self.biases_V)
       if self.gaussian_unit:       
         return bias
       return tf.sigmoid(bias)
@@ -219,7 +222,7 @@ class CRBM(object):
 
 
 
-  def dbn_infer_probability(self, my_visible, topdown_signal=None, result = 'hidden'):
+  def dbn_infer_probability(self, my_visible, topdown_signal=None, result='hidden', beta=CONST_ONE):
     """INTENT : Compute the probabily of activation of the hidden or pooling layer given the visible aka prev pooling,
                 and the next layer's hiddens (not poolings!)
     """
@@ -235,7 +238,7 @@ class CRBM(object):
       conv = tf.nn.conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='VALID')
     if self.gaussian_unit:  
       conv = tf.div(conv,self.gaussian_variance)
-    bias = tf.nn.bias_add(conv, self.biases_H)
+    bias = beta * tf.nn.bias_add(conv, self.biases_H)
     if self.prob_maxpooling: 
       'SPECIFIC CASE where we enable probabilistic max pooling'
       'This is section 3.6 in Lee!'
@@ -273,7 +276,7 @@ class CRBM(object):
         
         
 
-  def draw_samples(self, mean_activation, method='forward'):
+  def draw_samples(self, mean_activation, method='forward', beta=CONST_ONE):
     """INTENT : Draw samples from distribution of specified parameter
     ------------------------------------------------------------------------------------------------------------------------------------------
     PARAMETERS :
@@ -345,14 +348,14 @@ class CRBM(object):
     return patch_hid_samples.reshape(hs), patch_pool_samples.reshape(ps)
 
 
-  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden', just_give_the_means=False):      
+  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden', beta=CONST_ONE, just_give_the_means=False):      
     """ This correctly samples the hids/pools like in Lee, so that only one hid per block is active.
         In a maxpool, this is a py_func situation right now. sorry. """
     if just_give_the_means:
-      return self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result=result)
+      return self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result=result, beta=beta)
 
     if self.prob_maxpooling:
-      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both')
+      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both', beta=beta)
       hid_samples, pool_samples = tf.py_func(
         self._dbn_maxpool_sample_helper,
         [hid_probs, pool_probs],
@@ -367,7 +370,7 @@ class CRBM(object):
         return pool_samples
     elif result == 'hidden':
       # No pooling, standard sampler will suffice, just need to use dbn probs to incorporate layer above.
-      return self.draw_samples(self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal))
+      return self.draw_samples(self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, beta=beta))
     else:
       raise ValueError("Make sure result makes sense w this layer type.")
 
