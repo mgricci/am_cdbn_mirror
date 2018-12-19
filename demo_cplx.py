@@ -124,7 +124,7 @@ my_cdbn.lock_cdbn()
 """ ---------------------------------------------
     ------------------ TRAINING -----------------
     --------------------------------------------- """
-my_cdbn.manage_layers(['layer_1','layer_2','layer_3'],[],[10000,10000,10000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
+my_cdbn.manage_layers([],['layer_1','layer_2','layer_3'],[10000,10000,10000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
 
 # Init complex net
 ccdbn = cplx_cdbn.ComplexCDBN.init_from_cdbn(my_cdbn)
@@ -168,7 +168,7 @@ def save_cplx_anim(filename, z, fps=5, cplx=True):
     a.save(filename, fps=fps)
     plt.close('all')
 
-save_cplx_anim('v.mp4', v, cplx=False)
+save_cplx_anim('v.mp4', v)
 for i, p in enumerate(ps):
-  save_cplx_anim('p%d.mp4' % i, p, cplx=False)
+  save_cplx_anim('p%d.mp4' % i, p)
 
