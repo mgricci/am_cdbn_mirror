@@ -116,11 +116,9 @@ class ComplexCRBM(object):
   # are necessary for Gibbs sampling (i.e. the ones called in the
   # `ComplexCRBM.{dbn_gibbs,_gibbs_step}` methods.
 
-  def infer_probability(self, operand, method, result='hidden', beta=CONST_ONE):
+  def infer_probability(self, operand, method, result='hidden'):
     '''
-    This is a misnomer in this net, since we are computing parameters
-    for bernoulli and vonMises, not just probabilities. Keeping the name for
-    consistency.
+    This just computes Bernoulli params!
     RETURNS: please look at the return statement for the arguments you supplied,
     because they're all different.
     '''
@@ -135,7 +133,6 @@ class ComplexCRBM(object):
       if self.prob_maxpooling: 
         # Rate probs in probmaxpool
         a = tf.abs(conv)
-        alpha = tf.angle(conv)
         bessels = bessel_i0(a)
         custom_kernel = tf.constant(1.0, shape=[2,2,self.filter_number,1])
         sum_bessels = tf.nn.depthwise_conv2d(bessels, custom_kernel, [1, 2, 2, 1], padding='VALID')
@@ -153,22 +150,19 @@ class ComplexCRBM(object):
         pool_P = tf.subtract(1.0, tf.div(1.0, bessel_sftmx_denom))
         # Now get von Mises params for hids.
         # We're not gonna give vM params for pools. It's not vM so dwai.
-        hid_mu = alpha
         # TODO: whoops. this is wrong. it should be samples from rates, not ber_P. will
         # need to do some more serious restructuring to fix this.
-        hid_kappa = a * hid_cat_P
         if result == 'hidden':
-          return hid_cat_P, hid_mu, hid_kappa
+          return hid_cat_P
         elif result == 'pooling': 
-          raise(tf.errors.InvalidArgumentError("Can't just sample pools in cplx case."))
+          return pool_P
         elif result == 'both':
-          return hid_cat_P, pool_P, hid_mu, hid_kappa
+          return hid_cat_P, pool_P
       else:
         # Rate probs no probmaxpool
         b = bessel_i0(conv)
         hid_P = b / (1.0 + b)
-        # hid_P, hid_mu, hid_kappa.
-        return hid_P, alpha, a * hid_P
+        return hid_P
     
     'Computing VISIBLE layer with HIDDEN layer given'
     if method == 'backward':
@@ -178,14 +172,13 @@ class ComplexCRBM(object):
         conv = complex_conv2d(self._get_padded_hidden(operand),
           self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
       a = tf.abs(conv)
-      alpha = tf.angle(conv)
       b = bessel_i0(conv)
       vis_P = b / (1.0 + b)
-      return vis_P, alpha, a * vis_P
+      return vis_P
 
 
 
-  def dbn_infer_probability(self, my_visible, topdown_signal=None, result='hidden', beta=CONST_ONE):
+  def dbn_infer_probability(self, my_visible, topdown_signal=None, result='hidden'):
     """INTENT : Compute the probabily of activation of the hidden or pooling layer given the visible aka prev pooling,
                 and the next layer's hiddens (not poolings!)
     """
@@ -198,10 +191,9 @@ class ComplexCRBM(object):
     'Gaussian visible or not, hidden layer activation is a sigmoid'
     # handle the problem case where the next layer is fc. the impl makes weird shapes.
     if self.padding:
-      conv = tf.nn.conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='SAME')
+      conv = complex_conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='SAME')
     else:
-      conv = tf.nn.conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='VALID')
-    bias = beta * tf.nn.bias_add(conv, self.biases_H)
+      conv = complex_conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='VALID')
     if self.prob_maxpooling: 
       'SPECIFIC CASE where we enable probabilistic max pooling'
       'This is section 3.6 in Lee!'
@@ -218,42 +210,73 @@ class ComplexCRBM(object):
       supersampled_topdown = tf.nn.conv2d_transpose(topdown_signal, custom_kernel_bis,
         (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID')
       total_hidshape_signal = supersampled_topdown + bias
-      exp = tf.exp(total_hidshape_signal)
-      poolshape_denom = 1 + tf.nn.depthwise_conv2d(exp, custom_kernel, [1, 2, 2, 1], padding='VALID')
+      bessels = bessel_i0(tf.abs(total_hidshape_signal))
+      poolshape_denom = 1 + tf.nn.depthwise_conv2d(bessels, custom_kernel, [1, 2, 2, 1], padding='VALID')
       hidshape_denom = tf.nn.conv2d_transpose(poolshape_denom, custom_kernel_bis,
         (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID')
       if result == 'hidden': 
         'We want to obtain HIDDEN layer configuration'
-        return tf.div(exp, hidshape_denom)
+        return tf.div(bessels, hidshape_denom)
       elif result == 'pooling': 
         'We want to obtain POOLING layer configuration'
-        return tf.subtract(1.0,tf.div(1.0, poolshape_denom))
+        return tf.subtract(1.0, tf.div(1.0, poolshape_denom))
       elif result == 'both':
-        return (tf.div(exp, hidshape_denom), tf.subtract(1.0,tf.div(1.0, poolshape_denom)))
+        return (tf.div(bessels, hidshape_denom), tf.subtract(1.0,tf.div(1.0, poolshape_denom)))
 
     topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height, self.hidden_width, self.filter_number))
-    return tf.sigmoid(bias + topdown_signal)
+    bessels = bessel_i0(tf.abs(conv + topdown_signal))
+    return bessels / (1.0 + bessels)
 
-      
-        
-        
+
+
+  def infer_vm_params(self, operand, operand_rates, method):
+    if method == 'forward': 
+      # Propagate
+      if self.padding:
+        conv = complex_conv2d(operand, self.kernels, [1, 1, 1, 1], padding='SAME')
+      else:
+        conv = complex_conv2d(operand, self.kernels, [1, 1, 1, 1], padding='VALID')      
+      return tf.angle(conv), operand * tf.abs(conv)
+
+    if method == 'backward':
+      if self.padding:
+        conv = complex_conv2d(operand, self._get_flipped_kernel(), [1, 1, 1, 1], padding='SAME')
+      else:
+        conv = complex_conv2d(self._get_padded_hidden(operand),
+          self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
+      return tf.angle(conv), operand_rates * tf.abs(conv)
+
+
+
+  def dbn_infer_vm_params(self, my_visible, hid_rates, topdown_signal=None):
+    if self.padding:
+      conv = complex_conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='SAME')
+    else:
+      conv = complex_conv2d(my_visible, self.kernels, [1, 1, 1, 1], padding='VALID')
+    if self.prob_maxpooling:
+      # We need to reshape the topdown signal. 
+      topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number))
+      ret_kernel = np.zeros((2,2,self.filter_number,self.filter_number))
+      for i in range(2):
+        for j in range(2):
+          for k in range(self.filter_number):
+            ret_kernel[i,j,k,k] = 1
+      custom_kernel_bis = tf.constant(ret_kernel,dtype = tf.float32)
+      supersampled_topdown = tf.nn.conv2d_transpose(topdown_signal, custom_kernel_bis,
+        (self.batch_size,self.hidden_height,self.hidden_width,self.filter_number), strides= [1, 2, 2, 1], padding='VALID')
+      net_signal = conv + topdown_signal
+    else:
+      topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height, self.hidden_width, self.filter_number))
+      net_signal = conv + topdown_signal
+    return tf.angle(net_signal), hid_rates * tf.abs(net_signal)
+
         
 
-  def draw_samples(self, mean_activation, method='forward', beta=CONST_ONE):
-    """INTENT : Draw samples from distribution of specified parameter
-    ------------------------------------------------------------------------------------------------------------------------------------------
-    PARAMETERS :
-    mean_activation         :        parameter of the distribution to draw sampels from
-    method                  :        which direction for drawing sample ie forward or backward
-    ------------------------------------------------------------------------------------------------------------------------------------------
-    REMARK : If FORWARD then samples for HIDDEN layer (BERNOULLI)
-             If BACKWARD then samples for VISIBLE layer (BERNOULLI OR GAUSSIAN if self.gaussian_unit = True)"""
-    raise ValueError("Still need to translate to complex.")
-
+  def draw_samples(self, mean_activation, method='forward'):
     if method == 'forward':
       height   =  self.hidden_height
       width    =  self.hidden_width
-      channels =  self.filter_number  
+      channels =  self.filter_number
     elif method == 'backward':
       height   =  self.visible_height
       width    =  self.visible_width
@@ -261,13 +284,17 @@ class ComplexCRBM(object):
     return tf.where(tf.random_uniform([self.batch_size,height,width,channels]) - mean_activation < 0, tf.ones([self.batch_size,height,width,channels]), tf.zeros([self.batch_size,height,width,channels]))
 
 
-
+  def draw_bervm_samples(self, operand, method='forward'):
+    ber_means = self.infer_probability(operand, method)
+    rates = self.draw_samples(ber_means, method=method)
+    vm_mu, vm_kappa = self.infer_vm_params(operand, rates, method)
+    return rates * phasor(vonmises(vm_mu, vm_kappa))
 
 
 
   @staticmethod
   def _dbn_maxpool_sample_helper(hid_probs, pool_probs):
-    """ Helper for multinomial sampling. """
+    """ Helper for multinomial sampling. Just the rates. """
     # Store shapes for later
     hs, ps = hid_probs.shape, pool_probs.shape
 
@@ -306,21 +333,21 @@ class ComplexCRBM(object):
     return patch_hid_samples.reshape(hs), patch_pool_samples.reshape(ps)
 
 
-  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden', beta=CONST_ONE, just_give_the_means=False):      
+  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden'):      
     """ This correctly samples the hids/pools like in Lee, so that only one hid per block is active.
         In a maxpool, this is a py_func situation right now. sorry. """
-    raise ValueError("Still need to translate to complex.")
-    if just_give_the_means:
-      return self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result=result, beta=beta)
 
     if self.prob_maxpooling:
-      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both', beta=beta)
-      hid_samples, pool_samples = tf.py_func(
+      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both')
+      hid_rates, pool_rates = tf.py_func(
         self._dbn_maxpool_sample_helper,
         [hid_probs, pool_probs],
         (tf.float32, tf.float32))
-      hid_samples.set_shape([self.batch_size, self.hidden_height, self.hidden_width, self.filter_number])
-      pool_samples.set_shape([self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number])
+      hid_rates.set_shape([self.batch_size, self.hidden_height, self.hidden_width, self.filter_number])
+      pool_rates.set_shape([self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.filter_number])
+      hid_vm_mu, hid_vm_kappa = self.dbn_infer_vm_params(my_visible, hid_rates, topdown_signal=topdown_signal)
+      hid_phases = vonmises(hid_vm_mu, hid_vm_kappa)
+      hid_samples = hid_rates * phasor(hid_phases)
       if result == 'hidden':
         return hid_samples
       if result == 'both':
@@ -329,7 +356,10 @@ class ComplexCRBM(object):
         return pool_samples
     elif result == 'hidden':
       # No pooling, standard sampler will suffice, just need to use dbn probs to incorporate layer above.
-      return self.draw_samples(self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, beta=beta))
+      hid_rates = self.draw_samples(self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal))
+      hid_vm_mu, hid_vm_kappa = self.dbn_infer_vm_params(my_visible, hid_rates, topdown_signal=topdown_signal)
+      hid_phases = vonmises(hid_vm_mu, hid_vm_kappa)
+      hid_samples = hid_rates * phasor(hid_phases)
     else:
       raise ValueError("Make sure result makes sense w this layer type.")
 

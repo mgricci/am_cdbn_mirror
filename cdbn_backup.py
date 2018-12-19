@@ -569,7 +569,7 @@ class CDBN(object):
         means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', just_give_the_means=use_means, beta=beta)
       else:
         means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', just_give_the_means=use_means, beta=beta)
-      way_down_hps.insert(0, means)s
+      way_down_hps.insert(0, means)
 
     # ************************
     # Now, sample the visible input.
