@@ -1,17 +1,34 @@
 import tensorflow as tf
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+plt.ioff()
+from matplotlib import animation as anim
 import numpy as np
 from tensorflow.examples.tutorials.mnist import mnist
 from tensorflow.examples.tutorials.mnist import input_data
-from matplotlib import pyplot as plt
-from matplotlib import animation as anim
+from colorsys import hls_to_rgb
 import cdbn_backup as cdbn
 import cplx_cdbn
 import os
-
+import ipdb
 
 """ --------------------------------------------
     ------------------- DATA -------------------
     -------------------------------------------- """
+def colorize(z):
+    if len(z.shape) > 2:
+	z = np.squeeze(z)
+    r = np.abs(z)
+    arg = np.angle(z)
+
+    h = (arg + np.pi) / (2 * np.pi) + 0.5
+    l = 1.0 - 1.9/(1.9 + r**0.3)
+    s = 0.8
+
+    c = np.vectorize(hls_to_rgb)(h,l,s)
+    c = np.stack(c, axis=-1)
+    return c
 
 class MNIST_HANDLER(object):
   
@@ -132,7 +149,7 @@ ccdbn = cplx_cdbn.ComplexCDBN.init_from_cdbn(my_cdbn)
 # my_cdbn.do_eval()
 start_batch = mnist_dataset.next_batch(20)[0] + 0j
 noise_batch = np.random.binomial(1, 0.5, start_batch.shape) + 0j
-v, hs, ps = ccdbn.dbn_gibbs(noise_batch, 32)
+v, hs, ps = ccdbn.dbn_gibbs(start_batch, 32)
 
 print(v.shape)
 print([h.shape for h in hs])
@@ -169,6 +186,6 @@ def save_cplx_anim(filename, z, fps=5, cplx=True):
     plt.close('all')
 
 save_cplx_anim('v.mp4', v)
-for i, p in enumerate(ps):
+for i, p in enumerate(ps[:-1]):
   save_cplx_anim('p%d.mp4' % i, p)
 

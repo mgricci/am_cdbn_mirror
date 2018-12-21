@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 import scipy.special
 import skimage.util as imx
-
+import ipdb
 
 # *************************************************************************** #
 # Some complex library functions. Just gonna put these here for now.
@@ -362,7 +362,7 @@ class ComplexCRBM(object):
         In a maxpool, this is a py_func situation right now. sorry. """
 
     if self.prob_maxpooling:
-      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both')
+      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both', clamp=clamp)
       hid_rates, pool_rates = tf.py_func(
         self._dbn_maxpool_sample_helper,
         [hid_probs, pool_probs],
@@ -390,8 +390,4 @@ class ComplexCRBM(object):
       return hid_samples
     else:
       raise ValueError("Make sure result makes sense w this layer type.")
-
-
-
-
 

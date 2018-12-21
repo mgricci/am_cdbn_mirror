@@ -68,6 +68,8 @@ class ComplexCDBN(object):
     vis_h = means[0] if cur_layer.prob_maxpooling else means
     vis_layer = self.layers[0]
     vis_samples = vis_layer.draw_bervm_samples(vis_h, method='backward')
+    if self.clamp is not None:
+        vis_samples*=self.clamp
     vs = vs.write(t, vis_samples)
 
     # ************************
@@ -122,7 +124,7 @@ class ComplexCDBN(object):
 
 
 
-  def dbn_gibbs(self, start_vis_batch, n_gibbs):
+  def dbn_gibbs(self, start_vis_batch, n_gibbs, clamp=False):
     """INTENT: Gibbs sampling starting from a visible example.
                Should this be extended to start from something else?
 
@@ -156,6 +158,7 @@ class ComplexCDBN(object):
 
     # Now, the while loop.
     # The loop body starts deep (second to last layer), comes to visible, and then goes deep (last layer) again.
+    self.clamp = None if clamp is False else input_placeholder
     cond = lambda t, vs, hs, ps: tf.Print(t, [t], message="While loop step ") < n_gibbs
     loop_vars = [t, vs, hs, ps]
     body = partial(self._gibbs_step)
