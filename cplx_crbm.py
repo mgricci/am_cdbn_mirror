@@ -362,7 +362,7 @@ class ComplexCRBM(object):
         In a maxpool, this is a py_func situation right now. sorry. """
 
     if self.prob_maxpooling:
-      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both', clamp=clamp)
+      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both')
       hid_rates, pool_rates = tf.py_func(
         self._dbn_maxpool_sample_helper,
         [hid_probs, pool_probs],

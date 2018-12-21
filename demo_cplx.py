@@ -149,7 +149,7 @@ ccdbn = cplx_cdbn.ComplexCDBN.init_from_cdbn(my_cdbn)
 # my_cdbn.do_eval()
 start_batch = mnist_dataset.next_batch(20)[0] + 0j
 noise_batch = np.random.binomial(1, 0.5, start_batch.shape) + 0j
-v, hs, ps = ccdbn.dbn_gibbs(start_batch, 32)
+v, hs, ps = ccdbn.dbn_gibbs(start_batch, 128, clamp=True)
 
 print(v.shape)
 print([h.shape for h in hs])
