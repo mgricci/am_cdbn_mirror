@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 import scipy.special
 import skimage.util as imx
-
+import ipdb
 
 # *************************************************************************** #
 # Some complex library functions. Just gonna put these here for now.
@@ -41,6 +41,7 @@ def cplx_conv2d_transpose_real_filter(tensor, filters, out_shape, strides=[1,1,1
 
 
 def bessel_i0(x, dtype=tf.float64):
+  x = tf.clip_by_value(x, 0.0, 50.0)
   if dtype != x.dtype:
     # the 'need more bits' version, which is the default for our usual float32s.
     return tf.cast(
@@ -62,7 +63,7 @@ class ComplexCRBM(object):
 
   def __init__(self, name, fully_connected, v_height, v_width, v_channels,
       f_height, f_width, f_number, prob_maxpooling, padding, batch_size,
-      real_kernels):
+      real_kernels, real_v_biases, real_h_biases):
     self.name = name
     self.fully_connected = fully_connected
     self.v_height = v_height
@@ -84,19 +85,19 @@ class ComplexCRBM(object):
 
     # Get params
     self.kernels = as_cplx(real_kernels)
+    self.biases_V = real_v_biases
+    self.biases_H = real_h_biases
     # TODO: Not sure what to do with the biases. Gonna leave em alone for now.
-
 
   @classmethod
   def init_from_crbm(cls, crbm):
     if crbm.gaussian_unit:
       raise(tf.errors.InvalidArgumentError(
         "Not sure how to complex-ify a Gaussian-Bernoulli RBM."))
-
     return cls('cplx_' + crbm.name, crbm.fully_connected, crbm.visible_height,
       crbm.visible_width, crbm.visible_channels, crbm.filter_height, crbm.filter_width,
       crbm.filter_number, crbm.prob_maxpooling, crbm.padding, crbm.batch_size,
-      crbm.kernels)
+      crbm.kernels, crbm.biases_V, crbm.biases_H)
 
 
   # ************************************************************************* #
@@ -151,8 +152,8 @@ class ComplexCRBM(object):
       # Compute means
       if self.prob_maxpooling: 
         # Rate probs in probmaxpool
-        a = tf.abs(conv)
-        bessels = bessel_i0(a)
+        a = tf.clip_by_value(tf.abs(conv), 0.0, 50.0)
+        bessels = bessel_i0(a + self.biases_H)
         custom_kernel = tf.constant(1.0, shape=[2,2,self.f_number,1])
         sum_bessels = tf.nn.depthwise_conv2d(bessels, custom_kernel, [1, 2, 2, 1], padding='VALID')
         bessel_sftmx_denom = tf.add(1.0,sum_bessels)
@@ -179,7 +180,8 @@ class ComplexCRBM(object):
           return hid_cat_P, pool_P
       else:
         # Rate probs no probmaxpool
-        b = bessel_i0(tf.abs(conv))
+	a = tf.clip_by_value(tf.abs(conv), 0.0, 50.0)
+        b = bessel_i0(a + self.biases_H)
         hid_P = b / (1.0 + b)
         return hid_P
     
@@ -190,7 +192,8 @@ class ComplexCRBM(object):
       else:
         conv = complex_conv2d(self._get_padded_hidden(operand),
           self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
-      b = bessel_i0(tf.abs(conv))
+      a = tf.clip_by_value(tf.abs(conv), 0.0, 50.0)
+      b = bessel_i0(a + self.biases_V)
       vis_P = b / (1.0 + b)
       return vis_P
 
@@ -226,7 +229,7 @@ class ComplexCRBM(object):
       supersampled_topdown = cplx_conv2d_transpose_real_filter(topdown_signal, custom_kernel_bis,
         (self.batch_size,self.hidden_height,self.hidden_width,self.f_number), strides= [1, 2, 2, 1], padding='VALID')
       total_hidshape_signal = supersampled_topdown + conv
-      bessels = bessel_i0(tf.abs(total_hidshape_signal))
+      bessels = bessel_i0(tf.abs(total_hidshape_signal) + self.biases_H)
       poolshape_denom = 1 + tf.nn.depthwise_conv2d(bessels, custom_kernel, [1, 2, 2, 1], padding='VALID')
       hidshape_denom = tf.nn.conv2d_transpose(poolshape_denom, custom_kernel_bis,
         (self.batch_size,self.hidden_height,self.hidden_width,self.f_number), strides=[1, 2, 2, 1], padding='VALID')
@@ -240,7 +243,7 @@ class ComplexCRBM(object):
         return (tf.div(bessels, hidshape_denom), tf.subtract(1.0, tf.div(1.0, poolshape_denom)))
 
     topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height, self.hidden_width, self.f_number))
-    bessels = bessel_i0(tf.abs(conv + topdown_signal))
+    bessels = bessel_i0(tf.abs(conv + topdown_signal + self.biases_H))
     return bessels / (1.0 + bessels)
 
 
@@ -307,9 +310,9 @@ class ComplexCRBM(object):
     return tf.where(tf.random_uniform([self.batch_size,height,width,channels]) - mean_activation < 0, tf.ones([self.batch_size,height,width,channels]), tf.zeros([self.batch_size,height,width,channels]))
 
 
-  def draw_bervm_samples(self, operand, method='forward'):
+  def draw_bervm_samples(self, operand, method='forward', clamp=None):
     ber_means = self.infer_probability(operand, method)
-    rates = self.draw_samples(ber_means, method=method)
+    rates = self.draw_samples(ber_means, method=method) if clamp is None else tf.abs(clamp)
     vm_mu, vm_kappa = self.infer_vm_params(operand, rates, method)
     return as_cplx(rates) * phasor(vonmises(vm_mu, vm_kappa))
 
@@ -369,10 +372,12 @@ class ComplexCRBM(object):
         (tf.float32, tf.float32))
       hid_rates.set_shape([self.batch_size, self.hidden_height, self.hidden_width, self.f_number])
       pool_rates.set_shape([self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.f_number])
-      hid_vm_mu, hid_vm_kappa = self.dbn_infer_vm_params(my_visible, hid_rates, topdown_signal=topdown_signal)
+      hid_vm_mu, hid_vm_kappa = self.dbn_infer_vm_params(my_visible, tf.abs(hid_rates), topdown_signal=topdown_signal)
       print(hid_vm_kappa)
       hid_phases = vonmises(hid_vm_mu, hid_vm_kappa)
+      #hid_phases = tf.zeros_like(hid_vm_mu)
       hid_samples = as_cplx(hid_rates) * phasor(hid_phases)
+     # hid_samples = as_cplx(tf.ones_like(hid_vm_mu))
       custom_kernel = as_cplx(tf.constant(1.0, shape=[2,2,self.f_number,1]))
       pool_samples = cplx_depthwise_conv2d(hid_samples, custom_kernel, [1, 2, 2, 1], padding='VALID')
       if result == 'hidden':
