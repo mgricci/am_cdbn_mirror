@@ -396,7 +396,3 @@ class ComplexCRBM(object):
     else:
       raise ValueError("Make sure result makes sense w this layer type.")
 
-
-
-
-

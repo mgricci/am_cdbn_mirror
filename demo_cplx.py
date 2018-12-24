@@ -7,11 +7,11 @@ from matplotlib import animation as anim
 import numpy as np
 from tensorflow.examples.tutorials.mnist import mnist
 from tensorflow.examples.tutorials.mnist import input_data
+from colorsys import hls_to_rgb
 import cdbn_backup as cdbn
 import cplx_cdbn
 import os
 import ipdb
-from colorsys import hls_to_rgb
 
 """ --------------------------------------------
     ------------------- DATA -------------------
@@ -198,4 +198,3 @@ for i, h in enumerate(hs[:-1]):
 
 for i, p in enumerate(ps[:-1]):
   save_cplx_anim('/home/matt/dbn_figs/new_model/p%d.gif' % i, p)
-
