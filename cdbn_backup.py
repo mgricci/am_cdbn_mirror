@@ -1,4 +1,8 @@
 from __future__ import division
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+plt.ioff()
 import tensorflow as tf
 import numpy as np
 import time
@@ -6,13 +10,12 @@ import os
 import crbm_backup as crbm
 from six.moves import range
 from functools import partial
-
-
+import ipdb
 
 class CDBN(object):
   """CONVOLUTIONAL DEEP BELIEF NETWORK"""
   
-  def __init__(self, name, batch_size, path, data, session, verbosity = 2):
+  def __init__(self, name, batch_size, path, data, session, verbosity = 2, display=False):
     """INTENT : Initialization of a Convolutional Deep Belief Network
     ------------------------------------------------------------------------------------------------------------------------------------------
     PARAMETERS :
@@ -37,6 +40,7 @@ class CDBN(object):
     self.name                       =     name
     self.batch_size                 =     batch_size 
     self.path                       =     path + "/" + name
+    self.display 		    =     display
     tf.gfile.MakeDirs(self.path) 
     self.data                       =     data
     self.session                    =     session
@@ -257,7 +261,7 @@ class CDBN(object):
           print('Successfully restored the layer ' + layer + ' of CDBN ' + self.name)
             
         for i in range(len(layers_to_pretrain)):
-          self._pretrain_layer(layers_to_pretrain[i], step_for_pretraining[i], n_for_pretraining[i])
+          self._pretrain_layer(layers_to_pretrain[i], step_for_pretraining[i], n_for_pretraining[i], display=self.display)
           
         if self.softmax_layer and restore_softmax: 
           self._restore_layer('softmax_layer')
@@ -345,14 +349,14 @@ class CDBN(object):
         
         
 
-  def _pretrain_layer(self, rbm_layer_name, number_step, n = 1):
+  def _pretrain_layer(self, rbm_layer_name, number_step, n = 1, display=False):
     """INTENT : Pretrain the given layer
     ------------------------------------------------------------------------------------------------------------------------------------------
     PARAMETERS :
     rbm_layer_name         :        name of CRBM layer that we want to do one step of pretaining
     number_step            :        number of step to use for training
     n                      :        length of gibbs chain to use"""
-    
+    plotting_costs = []  
     start = time.time()  
     if self.verbosity > 0:
       start_t         = time.time()
@@ -377,6 +381,10 @@ class CDBN(object):
       visible             = np.reshape(input_images, self.input)
       _,_,_,err,con       = self.session.run([a,b,c,error,control], feed_dict={input_placeholder: visible, step_placeholder : np.array([i])})
 
+      if np.isnan(err):
+	raise ValueError("NaN encountered in error!")
+      average_cost /= self.batch_size
+
       if self.verbosity > 0:
         average_cost    = average_cost + err
         duration = time.time() - start_time
@@ -391,9 +399,17 @@ class CDBN(object):
         start_t = time.time()      
         
       if self.verbosity == 2 and i % 100 == 0 and not (i % 1000 == 0):
+	plotting_costs.append(average_cost / (i % 1000))
         print('Step %d: reconstruction error = %.05f (%.3f sec) and weight upgrade to weight ratio is %.2f percent  -----  Estimated remaining time is %.0f sec' % (i, average_cost/(i % 1000), duration, average_control/(i % 1000)*1,(number_step-i)*(time.time() - start_t)/(i % 1000)))
       elif self.verbosity == 2 and i % 1000 == 0:
         print('Step %d: reconstruction error = %.05f (%.3f sec) and weight upgrade to weight ratio is %.2f percent  -----  Estimated remaining time is %.0f sec' % (i, average_cost/1000, duration, average_control/1000*1,(number_step-i)*(time.time() - start_t)/1000))
+	plotting_costs.append(average_cost / 1000)
+	if display is True: 
+	    plt.plot(np.array(range(0,i, 100)),np.array(plotting_costs))
+	    plt.title('Reconstruction Cost, {}'.format(rbm_layer_name))
+	    plt.savefig(os.path.join(self.path, '{}_costs.png'.format(rbm_layer_name)))
+	    plt.close()
+	    
         average_cost    = 0
         average_control = 0
         start_t = time.time()  

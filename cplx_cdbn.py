@@ -1,7 +1,7 @@
 import tensorflow as tf
 from cplx_crbm import ComplexCRBM
 from functools import partial
-
+import ipdb
 
 class ComplexCDBN(object):
 
@@ -120,7 +120,65 @@ class ComplexCDBN(object):
 
     return [t, vs, hs, ps]
 
+  def _gibbs_step_alt(self, t, vs, hs, ps):
+    """INTENT: Start sampling from the second to last layer all the way to the visible,
+               then back to the very deepest layer. So this goes back out and then in.
+               This is the loop body used in `dbn_gibbs`' `while_loop`.
+      Should handle nets with mixed pooling/nonpooling units.
+    """
+    t += 1
+    # ************************
+    # Now, sample the visible input.
 
+    vis_h = hs[0].read(t-1)
+    vis_layer = self.layers[0]
+    vis_samples = vis_layer.draw_bervm_samples(vis_h, method='backward', clamp=self.clamp)
+    vs = vs.write(t, vis_samples)
+
+    # ************************
+    # Finally, sample the hidden/pooling layers all the way in.
+
+    # All but the last
+    for i in range(0, self.number_layer - 1):
+      # Get layer below (V in Lee sec 3.6)
+      if i == 0:
+        below_p = vis_samples
+      else:
+        below_p = hs[i - 1].read(t)
+        if self.layers[i - 1].prob_maxpooling:
+          below_p = ps[i-1].read(t)
+
+      # Get layer above (H' in Lee sec 3.6)
+      above_h = hs[ i + 1].read(t-1)
+
+      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward')
+
+      cur_layer = self.layers[i]
+      if cur_layer.prob_maxpooling:
+        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both')
+        hs[i] = hs[i].write(t, h)
+        ps[i] = ps[i].write(t, p)
+      else:
+        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden')
+        hs[i] = hs[i].write(t, h)
+        ps[i] = ps[i].write(t, p)
+
+    # Last layer's hids/pools
+    if self.fully_connected_layer == i + 1:
+      p = tf.reshape(p, [self.batch_size, -1])[:, None, None, :]
+
+    last_layer = self.layers[i + 1]
+
+    if last_layer.prob_maxpooling:
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both')
+      hs[-1] = hs[-1].write(t, last_means[0])
+      ps[-1] = ps[-1].write(t, last_means[1])
+    else:
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden')
+      hs[-1] = hs[-1].write(t, last_means)
+      ps[-1] = ps[-1].write(t, last_means)
+
+    return [t, vs, hs, ps]
 
   def dbn_gibbs(self, start_vis_batch, n_gibbs, clamp=False):
     """INTENT: Gibbs sampling starting from a visible example.
