@@ -699,15 +699,17 @@ class CDBN(object):
       feed_dict={ input_placeholder: start_vis_batch.reshape(self.input) })
 
   def save_parameter_histograms(self):
-    for l,layer in enumerate(self.layers):
-      kernels = layer.kernels
-      v_biases = layer.biases_V
-      h_biases = layer.biases_H 
-      plt.histogram(kernels)
+    
+    for l in range(self.number_layer):
+      layer = self.layer_name_to_object[self.layer_level_to_name[l]]
+      kernels = self.session.run(layer.kernels).reshape(-1)
+      v_biases = self.session.run(layer.biases_V).reshape(-1)
+      h_biases = self.session.run(layer.biases_H).reshape(-2)
+      plt.hist(kernels)
       plt.savefig('/home/matt/dbn_figs/stats/kernels_{}.png'.format(l))
-      plt.histogram(v_biases)
+      plt.hist(v_biases)
       plt.savefig('/home/matt/dbn_figs/stats/v_biases_{}.png'.format(l))
-      plt.histogram(h_biases)
+      plt.hist(h_biases)
       plt.savefig('/home/matt/dbn_figs/stats/h_biases_{}.png'.format(l))
 
   def _print_error_message(self,error):
