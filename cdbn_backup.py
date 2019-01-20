@@ -698,10 +698,18 @@ class CDBN(object):
       [v_run.stack(), [h.stack() for h in h_run], [p.stack() for p in p_run]],
       feed_dict={ input_placeholder: start_vis_batch.reshape(self.input) })
 
+  def save_parameter_histograms(self):
+    for l,layer in enumerate(self.layers):
+      kernels = layer.kernels
+      v_biases = layer.biases_V
+      h_biases = layer.biases_H 
+      plt.histogram(kernels)
+      plt.savefig('/home/matt/dbn_figs/stats/kernels_{}.png'.format(l))
+      plt.histogram(v_biases)
+      plt.savefig('/home/matt/dbn_figs/stats/v_biases_{}.png'.format(l))
+      plt.histogram(h_biases)
+      plt.savefig('/home/matt/dbn_figs/stats/h_biases_{}.png'.format(l))
 
-  
-  
-  
   def _print_error_message(self,error):
     print('----------------------------------------------')
     print('------------------ ERROR ---------------------')
