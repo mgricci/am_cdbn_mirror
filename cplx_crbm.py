@@ -84,10 +84,10 @@ class ComplexCRBM(object):
     self.input = (batch_size, v_height, v_width, v_channels)
 
     # Get params
-    self.kernels = as_cplx(real_kernels)
+    self.kernels = 10*as_cplx(real_kernels)
     self.biases_V = real_v_biases
     self.biases_H = real_h_biases
-    self.tmp_sigma_sq = .1
+    #self.tmp_sigma_sq = .01
     # TODO: Not sure what to do with the biases. Gonna leave em alone for now.
 
   @classmethod

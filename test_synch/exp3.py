@@ -31,8 +31,8 @@ class my_net(object):
 	if center_filters is True: 
 	    self.center()
 	self.out_shape = self.in_shape - self.filters[0].shape[0] + 1
-	#self.biases = bias*np.ones((3, self.out_shape, self.out_shape))
-	self.biases = .4*np.array([np.sum(f[f>0])*np.ones((self.out_shape, self.out_shape)) for f in self.filters])
+	self.biases = bias*np.ones((3, self.out_shape, self.out_shape))
+	#self.biases = .4*np.array([np.sum(f[f>0])*np.ones((self.out_shape, self.out_shape)) for f in self.filters])
 	
 	self.f_biases = f_bias*np.ones((3))
 	self.sigma_sq = sigma**2
@@ -90,6 +90,7 @@ class my_net(object):
 	if layer=='visible':
 	    rates = np.abs(self.clamp)
 	elif layer=='hidden':
+	    ipdb.set_trace()
 	    b = bessel(a - self.biases)	/ self.sigma_sq
 	    ber_P = b / (1.0 + b)
 	    rates = 1*(np.random.rand(3, self.out_shape, self.out_shape) < ber_P)
@@ -158,8 +159,8 @@ class my_net(object):
         return self.v_run, self.h_run, self.f_run
 
 #TODO Integrate across channels
-net = my_net(in_shape=54, weights=[1.0, 1.0, 1.0, 1.0], style='reichert', n_gibbs=64, sigma=2.0, bias=10.0, f_bias=-1.0, center_filters=True)
-clamp = generate_shape_img(30,30, pad_width=12)
+net = my_net(in_shape=44, weights=[1.0, 1.0, 1.0, 100.0], style='windolf', n_gibbs=64, sigma=.01, bias=25.0, f_bias=0.0, center_filters=True)
+clamp = generate_shape_img(20,20, pad_width=12)
 v, h, f = net.run(np.squeeze(clamp))
 v = np.array(v)
 f = np.array(f)
@@ -169,6 +170,6 @@ h = np.array(h)
 h = np.transpose(h, axes=(1,0,2,3))
 full = v
 full[0,:, 0, -3:, 0] = f
-save_cplx_anim('v', full)
-save_cplx_anim('h',h, number=3)
+save_cplx_anim('/home/matt/v', full)
+save_cplx_anim('/home/matt/h',h, number=3)
 print('done')

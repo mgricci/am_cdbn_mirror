@@ -12,41 +12,45 @@ import ipdb
 # CROSSED BARS EXPERIMENT:
 
 class my_net(object):
-    def __init__(self, in_shape=17,
-		       weights = [1.0, 1.0],
+    def __init__(self, RF_size=10,
+		       overlap = 2,
+		       weight = 1.0,
 		       n_gibbs = 32,
 		       style='reichert',
-		       fix_visible_phase=False, 
 		       sigma=1.0, 
 		       bias = 0.0,
 		       center_filters='yes'):
         # set attributes, including sampling type
-	self.in_shape = in_shape
+	self.RF_size = RF_size
+	self.overlap = overlap
+	self.in_shape = [2*self.RF_size - self.overlap, self.RF_size]
+	self.out_shape = 2
+	self.weight = weight
+	self.mid = int(np.floor(RF_size / 2.0))
+	self.clamp = self.make_stim()
 	self.style    = style
 	self.n_gibbs  = n_gibbs
 	self.sample = self.reichert_sampling if style is 'reichert' else self.windolf_sampling
-	self.fix_phase = fix_visible_phase
 	self.sigma_sq = sigma**2
-	self.mid = int(np.floor(in_shape / 2.0))
-	
 
 	# Filters
-	filter1      = np.zeros((in_shape, in_shape))
-	filter1[self.mid,:] = 1.0
-	filter2 = filter1.T
-	self.filters = [weights[0]*filter1, weights[1]*filter2]
+	filt = np.zeros((self.RF_size, self.RF_size))
+	filt[:, self.mid] = 1.0
+	self.filters = [self.weight*filt, self.weight*filt]
 	if center_filters == 'yes':
 	    self.center()
 	elif center_filters == 'other':
-	    self.filters[0] -= self.filters[1]
-	    self.filters[0][self.mid,self.mid] = weights[0]
-	    self.filters[1] = np.copy(self.filters[0].T)
-	    self.filters[1][self.mid,self.mid] = -weights[1]
-	self.out_shape = len(self.filters)
+	    self.filters[0][self.filters[0]==0] = -1 * self.weight
 	self.biases = bias*np.ones((self.out_shape))
     def center(self):
 	for f, filt in enumerate(self.filters):
 	    self.filters[f] = filt - np.mean(filt)
+    def make_stim(self):
+	height = 2*self.RF_size - overlap
+	width  = self.RF_size
+	stim = np.zeros((height, width))
+	stim[:, self.mid] = 1.0
+	return stim
     
     def reichert_sampling(self, params, layer):
 	if layer == 'hidden':
@@ -63,11 +67,6 @@ class my_net(object):
 	    rates = 1*(np.random.rand(self.out_shape) < sigmoid(.5*classic + .5*np.abs(synchrony) - self.biases)) 
 	    phases = np.angle(synchrony)
 
-	if self.fix_phase and layer == 'visible':
-	    center_phase = phases[self.mid,self.mid]
-	    phases = np.angle(self.clamp)
-	    phases[self.mid,self.mid] = center_phase
-
 	return rates*np.exp(1j*phases)
 
     def windolf_sampling(self, params, layer):
@@ -83,30 +82,25 @@ class my_net(object):
 	    rates = 1*(np.random.rand(self.out_shape) < ber_P)
 	    #phases = np.where(rates > 0, vm(alpha, rates*a / self.sigma_sq), np.angle(self.h_run[-1]))
 	phases = vm(alpha, rates*a / self.sigma_sq)
-	if self.fix_phase and layer == 'visible':
-	    center_phase = phases[self.mid,self.mid]
-	    phases = np.angle(self.clamp)
-	    phases[self.mid,self.mid] = center_phase
 	return rates*np.exp(1j*phases)
 
     def x_in(self, vis):
 	if self.style == 'reichert':
             return [(np.sum(np.abs(vis)*filt), np.sum(vis*filt)) for filt in self.filters]
-	else: 
-            return np.array([np.sum(vis*filt) for filt in self.filters]) 
+	else:
+	    RFs = [vis[i*self.RF_size - i*self.overlap:(i+1)*self.RF_size,:] for i in range(2)]
+            return np.array([np.sum(R*filt) for (R, filt) in zip(RFs, self.filters)]) 
 
     def x_out(self, hid):
 	if self.style == 'reichert':
 	    return list(np.sum(np.array([(np.abs(h)*filt, h*filt) for (h,filt) in zip(hid, self.filters)]), axis=0))
 	else:
-	    return np.sum(np.array([h*filt for (h,filt) in zip(hid, self.filters)]), axis=0)
+	    topdown = [h*filt for (h, filt) in zip(hid, self.filters)]
+	    overlap = topdown[0][-1*self.overlap:, :] + topdown[1][:self.overlap, :]
+	    return np.concatenate((topdown[0][:-1*self.overlap, :], overlap, topdown[1][self.overlap:, :]))
 
-    def run(self, clamped_visible):
-	self.clamp = clamped_visible
-	if self.fix_phase:
-	    self.v_run = [clamped_visible]
-	else:
-	    self.v_run = [clamped_visible*np.exp(1j*2*np.pi*np.random.rand(self.in_shape, self.in_shape))]
+    def run(self):
+	self.v_run = [self.clamp*np.exp(1j*2*np.pi*np.random.rand(self.in_shape[0], self.in_shape[1]))]
 	self.h_run = [np.zeros(self.out_shape)]
         for i in range(self.n_gibbs):
 	    print('Iteration {}'.format(i))
@@ -127,15 +121,13 @@ class my_net(object):
 #	        	size      = 17  / 17
 #	        	n_samples = 50  / 50
 
-n_gibbs=200
-size = 19
-centered_net = my_net(in_shape=size,weights=[20.0, 20.0], style='windolf', n_gibbs=n_gibbs, fix_visible_phase=False, sigma=.1, center_filters='yes', bias=0.0)
-uncentered_net = my_net(in_shape=size,weights=[20.0, 20.0], style='windolf', n_gibbs=n_gibbs, fix_visible_phase=False, sigma=.1, center_filters='no', bias=0.0)
-other_net = my_net(in_shape = size,weights=[20.0, 20.0], style='windolf', n_gibbs=n_gibbs, fix_visible_phase=False, sigma=.1, center_filters='other', bias=0.0)
-clamp = np.zeros((size, size))
-mid = int(np.floor(size / 2.0))
-clamp[mid,:] = 1.0
-clamp[:,mid] = 1.0
+#TODO Reichert sampling
+n_gibbs= 64
+RF_size = 40
+overlap = 2
+centered_net = my_net(RF_size=RF_size,overlap=overlap,weight=20.0, style='windolf', n_gibbs=n_gibbs, sigma=.1, center_filters='yes', bias=0.0)
+uncentered_net = my_net(RF_size = RF_size,overlap=overlap,weight=20.0, style='windolf', n_gibbs=n_gibbs, sigma=.1, center_filters='no', bias=0.0)
+other_net = my_net(RF_size = RF_size,overlap=overlap,weight=20.0, style='windolf', n_gibbs=n_gibbs, sigma=.1, center_filters='other', bias=0.0)
 
 #clamp[self.mid,:] = np.exp(1j*0)
 #clamp[:,self.mid] = np.exp(1j*np.pi)
@@ -145,14 +137,15 @@ all_cphase = []
 all_uphase = []
 all_ophase = []
 for i in range(50):
-    cv, ch = centered_net.run(clamp)
-    uv, uh = uncentered_net.run(clamp)
-    ov, oh = other_net.run(clamp)
-    #uv = np.array(uv)
-    #uv = np.expand_dims(uv, -1)
-    #uv = np.expand_dims(uv, 0)
-    #uv[0,:,0,-2:,0] = np.array(uh)
-    #save_cplx_anim('/home/matt/v', uv)
+    cv, ch = centered_net.run()
+    uv, uh = uncentered_net.run()
+    ov, oh = other_net.run()
+    cv = np.array(cv)
+    cv = np.expand_dims(cv, -1)
+    cv = np.expand_dims(cv, 0)
+    cv[0,:,0,-2:,0] = np.array(ch)
+    save_cplx_anim('/home/matt/v', cv)
+    ipdb.set_trace()
 
     cphase_differences = [ np.abs(np.mean(np.angle(vis[mid,:])) - np.mean(np.angle(vis[:,mid]))) for vis in cv]
     uphase_differences = [ np.abs(np.mean(np.angle(vis[mid,:])) - np.mean(np.angle(vis[:,mid]))) for vis in uv]

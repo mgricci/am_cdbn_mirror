@@ -66,7 +66,8 @@ my_cdbn.lock_cdbn()
 """ ---------------------------------------------
     ------------------ TRAINING -----------------
     --------------------------------------------- """
-my_cdbn.manage_layers([],['layer_1','layer_2','layer_3'],[2000,2000,3000], [1,1,1], 20000, restore_softmax = False, fine_tune = False)
+my_cdbn.manage_layers([],['layer_1','layer_2','layer_3'],[2000,2000,3000], [1,1,1], 20000, restore_softmax = False, fine_tune = True)
+ipdb.set_trace()
 #my_cdbn.do_eval()
 
 # Init complex net
@@ -86,8 +87,7 @@ ccdbn = cplx_cdbn.ComplexCDBN.init_from_cdbn(my_cdbn)
 shape_batch = shape_dataset.next_batch(64)[0] + 0j
 rand_phase = np.exp(1j*2*np.pi*np.random.rand(shape_batch.shape[0], shape_batch.shape[1], shape_batch.shape[2], shape_batch.shape[3]))
 shape_batch = shape_batch*rand_phase
-ipdb.set_trace()
-v, hs, ps = ccdbn.dbn_gibbs(shape_batch, 32, clamp=True)
+v, hs, ps = ccdbn.dbn_gibbs(shape_batch, 64, clamp=True)
 v = v.squeeze().swapaxes(0, 1)
 ps = [r.squeeze().swapaxes(0, 1)[:, ..., 0] for r in ps]
 hs = [r.squeeze().swapaxes(0, 1)[:, ..., 0] for r in hs]
@@ -98,5 +98,5 @@ save_cplx_anim('/home/matt/dbn_figs/new_model/v_', v, number = 10, type=anim_typ
 #for i, h in enumerate(hs[:-1]):
 #    save_cplx_anim('/home/matt/dbn_figs/new_model/h%d_' % i, h, number = 5, type=anim_type)
 
-#for i, p in enumerate(ps[:-1]):
-#  save_cplx_anim('/home/matt/dbn_figs/new_model/p%d_' % i, p, number = 5, type=anim_type)
+for i, p in enumerate(ps[:-1]):
+  save_cplx_anim('/home/matt/dbn_figs/new_model/p%d_' % i, p, number = 5, type=anim_type)
