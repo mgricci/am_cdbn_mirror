@@ -707,10 +707,36 @@ class CDBN(object):
       h_biases = self.session.run(layer.biases_H).reshape(-2)
       plt.hist(kernels)
       plt.savefig('/home/matt/dbn_figs/stats/kernels_{}.png'.format(l))
+      plt.close()
       plt.hist(v_biases)
       plt.savefig('/home/matt/dbn_figs/stats/v_biases_{}.png'.format(l))
+      plt.close()
       plt.hist(h_biases)
       plt.savefig('/home/matt/dbn_figs/stats/h_biases_{}.png'.format(l))
+      plt.close()
+
+  def save_feature_figs(self):
+    for l in range(self.number_layer):
+      layer = self.layer_name_to_object[self.layer_level_to_name[l]]
+      if not layer.fully_connected:
+        kernels = self.session.run(layer.kernels)
+        num_kernels = kernels.shape[-2]*kernels.shape[-1]
+        fig, axes = plt.subplots(nrows=4,ncols=4)
+        num_subplots = min(num_kernels,16)
+        n = 0
+        while n < num_subplots:
+	  ax = axes[np.unravel_index(n,(4,4))]
+	  ker_ind = np.unravel_index(n,(kernels.shape[-2], kernels.shape[-1]))
+	  ax.imshow(kernels[:,:,ker_ind[0], ker_ind[1]])
+	  n+=1
+        #plt.colorbar() 
+        plt.savefig('/home/matt/dbn_figs/stats/kernels_layer_{}.png'.format(l))
+        plt.close()
+      else: 
+	weights = np.squeeze(self.session.run(layer.kernels))
+	plt.imshow(weights)
+	plt.savefig('/home/matt/dbn_figs/stats/weights_layer_{}.png'.format(l))
+        plt.close()
 
   def _print_error_message(self,error):
     print('----------------------------------------------')

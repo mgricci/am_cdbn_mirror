@@ -5,16 +5,20 @@ import ipdb
 
 class ComplexCDBN(object):
 
-  def __init__(self, session, fully_connected_layer, batch_size):
+  def __init__(self, session, fully_connected_layer, batch_size, anneal=False, init_sigma=1.0, min_sigma=.2, sigma_rate=1.0):
     self.layers = []
     self.session = session
     self.fully_connected_layer = fully_connected_layer
     self.batch_size = batch_size
+    self.anneal = anneal
+    self.init_sigma = init_sigma
+    self.min_sigma = min_sigma
+    self.sigma_rate = sigma_rate
 
 
   @classmethod
-  def init_from_cdbn(cls, cdbn):
-    me = cls(cdbn.session, cdbn.fully_connected_layer, cdbn.batch_size)
+  def init_from_cdbn(cls, cdbn, init_sigma=1.0, min_sigma=.2, sigma_rate=1.0):
+    me = cls(cdbn.session, cdbn.fully_connected_layer, cdbn.batch_size, init_sigma=init_sigma, min_sigma=min_sigma, sigma_rate=sigma_rate)
     for i, crbm_name in cdbn.layer_level_to_name.items():
       print(i)
       crbm = cdbn.layer_name_to_object[crbm_name]
@@ -29,8 +33,7 @@ class ComplexCDBN(object):
   def number_layer(self):
     return len(self.layers)
 
-
-  def _gibbs_step(self, t, vs, hs, ps):
+  def _gibbs_step(self, t, vs, hs, ps, ss):
     """INTENT: Start sampling from the second to last layer all the way to the visible,
                then back to the very deepest layer. So this goes back out and then in.
                This is the loop body used in `dbn_gibbs`' `while_loop`.
@@ -53,13 +56,13 @@ class ComplexCDBN(object):
       # Get layer above (H' in Lee sec 3.6)
       above_h = hs[i + 1].read(t - 1)
 
-      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward')
+      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward', sigma=ss)
 
       cur_layer = self.layers[i]
       if cur_layer.prob_maxpooling:
-        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both')
+        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', sigma=ss)
       else:
-        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden')
+        means = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', sigma=ss)
       way_down_hps.insert(0, means)
 
     # ************************
@@ -67,7 +70,7 @@ class ComplexCDBN(object):
 
     vis_h = means[0] if cur_layer.prob_maxpooling else means
     vis_layer = self.layers[0]
-    vis_samples = vis_layer.draw_bervm_samples(vis_h, method='backward', clamp=self.clamp)
+    vis_samples = vis_layer.draw_bervm_samples(vis_h, method='backward', clamp=self.clamp, sigma=ss)
     vs = vs.write(t, vis_samples)
 
     # ************************
@@ -91,15 +94,15 @@ class ComplexCDBN(object):
       else:
         above_h = hs[i + 1].read(t - 1)
 
-      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward')
+      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward', sigma=ss)
 
       cur_layer = self.layers[i]
       if cur_layer.prob_maxpooling:
-        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both')
+        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', sigma=ss)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
       else:
-        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden')
+        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', sigma=ss)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
 
@@ -110,17 +113,21 @@ class ComplexCDBN(object):
     last_layer = self.layers[i + 1]
 
     if last_layer.prob_maxpooling:
-      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both')
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both', sigma=ss)
       hs[-1] = hs[-1].write(t, last_means[0])
       ps[-1] = ps[-1].write(t, last_means[1])
     else:
-      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden')
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden', sigma=ss)
       hs[-1] = hs[-1].write(t, last_means)
       ps[-1] = ps[-1].write(t, last_means)
 
-    return [t, vs, hs, ps]
+    if self.anneal:
+        ss*=self.sigma_rate
+        ss=tf.where(ss <= self.min_sigma, self.min_sigma, ss)
 
-  def _gibbs_step_alt(self, t, vs, hs, ps):
+    return [t, vs, hs, ps, ss]
+
+  def _gibbs_step_alt(self, t, vs, hs, ps, ss):
     """INTENT: Start sampling from the second to last layer all the way to the visible,
                then back to the very deepest layer. So this goes back out and then in.
                This is the loop body used in `dbn_gibbs`' `while_loop`.
@@ -151,15 +158,15 @@ class ComplexCDBN(object):
       # Get layer above (H' in Lee sec 3.6)
       above_h = hs[ i + 1].read(t-1)
 
-      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward')
+      topdown_signal = self.layers[i + 1].infer_probability(above_h, 'backward', sigma=ss)
 
       cur_layer = self.layers[i]
       if cur_layer.prob_maxpooling:
-        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both')
+        h, p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='both', sigma=ss)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
       else:
-        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden')
+        h = p = cur_layer.dbn_draw_samples(below_p, topdown_signal=topdown_signal, result='hidden', sigma=ss)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
 
@@ -170,17 +177,21 @@ class ComplexCDBN(object):
     last_layer = self.layers[i + 1]
 
     if last_layer.prob_maxpooling:
-      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both')
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='both', sigma=ss)
       hs[-1] = hs[-1].write(t, last_means[0])
       ps[-1] = ps[-1].write(t, last_means[1])
     else:
-      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden')
+      last_means = last_layer.dbn_draw_samples(p, topdown_signal=None, result='hidden', sigma=ss)
       hs[-1] = hs[-1].write(t, last_means)
       ps[-1] = ps[-1].write(t, last_means)
 
-    return [t, vs, hs, ps]
+    if self.anneal:
+        ss*=self.sigma_rate
+        ss=tf.where(ss <= self.min_sigma, self.min_sigma, ss)
 
-  def dbn_gibbs(self, start_vis_batch, n_gibbs, clamp=False):
+    return [t, vs, hs, ps, ss]
+
+  def dbn_gibbs(self, start_vis_batch, n_gibbs, clamp=False, anneal=True, init_sigma=.4, min_sigma=.2, sigma_rate=.995):
     """INTENT: Gibbs sampling starting from a visible example.
                Should this be extended to start from something else?
 
@@ -198,27 +209,28 @@ class ComplexCDBN(object):
     t = tf.constant(0)
     vs = vs.write(t, input_placeholder)
     ret_data = input_placeholder
+    ss = tf.constant(self.init_sigma)
     for i in range(self.number_layer):
       ret_layer = self.layers[i]
       if self.fully_connected_layer == i:
         ret_data = tf.reshape(ret_data, [self.batch_size, -1])[:, None, None, :]
       if ret_layer.prob_maxpooling:
-        h, p = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='both')
+        h, p = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='both', sigma=ss)
         hs[i] = hs[i].write(t, h)
         ps[i] = ps[i].write(t, p)
         ret_data = p
       else:
-        ret_data = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='hidden') 
+        ret_data = ret_layer.dbn_draw_samples(ret_data, topdown_signal=None, result='hidden', sigma=ss) 
         hs[i] = hs[i].write(t, ret_data)
         ps[i] = ps[i].write(t, ret_data)
 
     # Now, the while loop.
     # The loop body starts deep (second to last layer), comes to visible, and then goes deep (last layer) again.
     self.clamp = None if clamp is False else input_placeholder
-    cond = lambda t, vs, hs, ps: tf.Print(t, [t], message="While loop step ") < n_gibbs
-    loop_vars = [t, vs, hs, ps]
-    body = partial(self._gibbs_step)
-    _, v_run, h_run, p_run = tf.while_loop(cond, body, loop_vars)
+    cond = lambda t, vs, hs, ps, ss: tf.Print(t, [t], message="While loop step ") < n_gibbs
+    loop_vars = [t, vs, hs, ps, ss]
+    body = partial(self._gibbs_step_alt)
+    _, v_run, h_run, p_run, ss = tf.while_loop(cond, body, loop_vars)
   
     # Actually run the thing.
     return self.session.run(

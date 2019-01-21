@@ -84,10 +84,9 @@ class ComplexCRBM(object):
     self.input = (batch_size, v_height, v_width, v_channels)
 
     # Get params
-    self.kernels = 10*as_cplx(real_kernels)
-    self.biases_V = real_v_biases
-    self.biases_H = real_h_biases
-    #self.tmp_sigma_sq = .01
+    self.kernels = 10*as_cplx(real_kernels - tf.reduce_mean(real_kernels)) 
+    self.biases_V = real_v_biases*0
+    self.biases_H = real_h_biases*0
     # TODO: Not sure what to do with the biases. Gonna leave em alone for now.
 
   @classmethod
@@ -137,7 +136,7 @@ class ComplexCRBM(object):
   # are necessary for Gibbs sampling (i.e. the ones called in the
   # `ComplexCRBM.{dbn_gibbs,_gibbs_step}` methods.
 
-  def infer_probability(self, operand, method, result='hidden'):
+  def infer_probability(self, operand, method, result='hidden', sigma=1.0):
     '''
     This just computes Bernoulli params!
     RETURNS: please look at the return statement for the arguments you supplied,
@@ -154,7 +153,7 @@ class ComplexCRBM(object):
       if self.prob_maxpooling: 
         # Rate probs in probmaxpool
         a = tf.clip_by_value(tf.abs(conv), 0.0, 50.0)
-        bessels = bessel_i0(a + self.biases_H) // self.tmp_sigma_sq
+        bessels = bessel_i0(a + self.biases_H) // sigma**2
         custom_kernel = tf.constant(1.0, shape=[2,2,self.f_number,1])
         sum_bessels = tf.nn.depthwise_conv2d(bessels, custom_kernel, [1, 2, 2, 1], padding='VALID')
         bessel_sftmx_denom = tf.add(1.0,sum_bessels)
@@ -182,7 +181,7 @@ class ComplexCRBM(object):
       else:
         # Rate probs no probmaxpool
 	a = tf.clip_by_value(tf.abs(conv), 0.0, 50.0)
-        b = bessel_i0(a + self.biases_H) // self.tmp_sigma_sq
+        b = bessel_i0(a + self.biases_H) // sigma**2
         hid_P = b / (1.0 + b)
         return hid_P
     
@@ -194,18 +193,18 @@ class ComplexCRBM(object):
         conv = complex_conv2d(self._get_padded_hidden(operand),
           self._get_flipped_kernel(), [1, 1, 1, 1], padding='VALID')
       a = tf.clip_by_value(tf.abs(conv), 0.0, 50.0)
-      b = bessel_i0(a + self.biases_V) // self.tmp_sigma_sq
+      b = bessel_i0(a + self.biases_V) // sigma**2
       vis_P = b / (1.0 + b)
       return vis_P
 
 
 
-  def dbn_infer_probability(self, my_visible, topdown_signal=None, result='hidden'):
+  def dbn_infer_probability(self, my_visible, topdown_signal=None, result='hidden', sigma=1.0):
     """INTENT : Compute the probabily of activation of the hidden or pooling layer given the visible aka prev pooling,
                 and the next layer's hiddens (not poolings!)
     """
     if topdown_signal is None:
-      return self.infer_probability(my_visible, 'forward', result=result)
+      return self.infer_probability(my_visible, 'forward', result=result, sigma=sigma)
 
     'Computing HIDDEN layer with MY VISIBLE, NEXT HIDDEN layers given'
     'Gaussian visible or not, hidden layer activation is a sigmoid'
@@ -230,7 +229,7 @@ class ComplexCRBM(object):
       supersampled_topdown = cplx_conv2d_transpose_real_filter(topdown_signal, custom_kernel_bis,
         (self.batch_size,self.hidden_height,self.hidden_width,self.f_number), strides= [1, 2, 2, 1], padding='VALID')
       total_hidshape_signal = supersampled_topdown + conv
-      bessels = bessel_i0(tf.abs(total_hidshape_signal) + self.biases_H) // self.tmp_sigma_sq
+      bessels = bessel_i0(tf.abs(total_hidshape_signal) + self.biases_H) // sigma**2
       poolshape_denom = 1 + tf.nn.depthwise_conv2d(bessels, custom_kernel, [1, 2, 2, 1], padding='VALID')
       hidshape_denom = tf.nn.conv2d_transpose(poolshape_denom, custom_kernel_bis,
         (self.batch_size,self.hidden_height,self.hidden_width,self.f_number), strides=[1, 2, 2, 1], padding='VALID')
@@ -244,7 +243,7 @@ class ComplexCRBM(object):
         return (tf.div(bessels, hidshape_denom), tf.subtract(1.0, tf.div(1.0, poolshape_denom)))
 
     topdown_signal = tf.reshape(topdown_signal, (self.batch_size, self.hidden_height, self.hidden_width, self.f_number))
-    bessels = bessel_i0(tf.abs(conv + as_cplx(topdown_signal) ) + self.biases_H) // self.tmp_sigma_sq
+    bessels = bessel_i0(tf.abs(conv + as_cplx(topdown_signal) ) + self.biases_H) // sigma**2
     return bessels / (1.0 + bessels)
 
 
@@ -311,11 +310,11 @@ class ComplexCRBM(object):
     return tf.where(tf.random_uniform([self.batch_size,height,width,channels]) - mean_activation < 0, tf.ones([self.batch_size,height,width,channels]), tf.zeros([self.batch_size,height,width,channels]))
 
 
-  def draw_bervm_samples(self, operand, method='forward', clamp=None):
-    ber_means = self.infer_probability(operand, method)
+  def draw_bervm_samples(self, operand, method='forward', clamp=None, sigma=1.0):
+    ber_means = self.infer_probability(operand, method, sigma=sigma)
     rates = self.draw_samples(ber_means, method=method) if clamp is None else tf.abs(clamp)
     vm_mu, vm_kappa = self.infer_vm_params(operand, rates, method)
-    return as_cplx(rates) * phasor(vonmises(vm_mu, vm_kappa // self.tmp_sigma_sq))
+    return as_cplx(rates) * phasor(vonmises(vm_mu, vm_kappa // sigma**2))
 
 
 
@@ -361,12 +360,12 @@ class ComplexCRBM(object):
     return patch_hid_samples.reshape(hs), patch_pool_samples.reshape(ps)
 
 
-  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden'):      
+  def dbn_draw_samples(self, my_visible, topdown_signal=None, result='hidden', sigma=1.0):      
     """ This correctly samples the hids/pools like in Lee, so that only one hid per block is active.
         In a maxpool, this is a py_func situation right now. sorry. """
 
     if self.prob_maxpooling:
-      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both')
+      hid_probs, pool_probs = self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal, result='both', sigma=sigma)
       hid_rates, pool_rates = tf.py_func(
         self._dbn_maxpool_sample_helper,
         [hid_probs, pool_probs],
@@ -374,7 +373,7 @@ class ComplexCRBM(object):
       hid_rates.set_shape([self.batch_size, self.hidden_height, self.hidden_width, self.f_number])
       pool_rates.set_shape([self.batch_size, self.hidden_height // 2, self.hidden_width // 2, self.f_number])
       hid_vm_mu, hid_vm_kappa = self.dbn_infer_vm_params(my_visible, tf.abs(hid_rates), topdown_signal=topdown_signal)
-      hid_phases = vonmises(hid_vm_mu, hid_vm_kappa // self.tmp_sigma_sq)
+      hid_phases = vonmises(hid_vm_mu, hid_vm_kappa // sigma**2)
       hid_samples = as_cplx(hid_rates) * phasor(hid_phases)
       custom_kernel = as_cplx(tf.constant(1.0, shape=[2,2,self.f_number,1]))
       pool_samples = cplx_depthwise_conv2d(hid_samples, custom_kernel, [1, 2, 2, 1], padding='VALID')
@@ -388,7 +387,7 @@ class ComplexCRBM(object):
       # No pooling, standard sampler will suffice, just need to use dbn probs to incorporate layer above.
       hid_rates = self.draw_samples(self.dbn_infer_probability(my_visible, topdown_signal=topdown_signal))
       hid_vm_mu, hid_vm_kappa = self.dbn_infer_vm_params(my_visible, hid_rates, topdown_signal=topdown_signal)
-      hid_phases = vonmises(hid_vm_mu, hid_vm_kappa // self.tmp_sigma_sq)
+      hid_phases = vonmises(hid_vm_mu, hid_vm_kappa // sigma**2)
       hid_samples = as_cplx(hid_rates) * phasor(hid_phases)
       return hid_samples
     else:
