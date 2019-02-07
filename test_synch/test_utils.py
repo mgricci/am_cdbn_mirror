@@ -20,7 +20,9 @@ def colorize(z):
     c = np.stack(c, axis=-1)
     return c
 	
-def cplx_imshow(ax, z, cm):
+def cplx_imshow(ax, z, cm=None):
+    if cm == None:
+        cm = plt.cm.hsv
     return ax.imshow(colorize(z), aspect='equal', interpolation='nearest', cmap=cm)
 def real_imshow(ax, z, cm):
     return ax.imshow(z, aspect='equal', interpolation='nearest', cmap=cm)
